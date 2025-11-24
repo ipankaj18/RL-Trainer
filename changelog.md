@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file. Entries are grouped by date and categorized as Added, Changed, Fixed, Removed, or Deprecated.
 
+## [1.4.3] - 2025-11-24
+### Added
+- Test pipeline guardrails now verify that Phase 1 and Phase 2 generate evaluation artifacts before proceeding, failing fast in test runs so missing `evaluations.npz` surfaces before production (`main.py`).
+
+### Changed
+- Evaluation cadence logging now reports real timestep cadence across vectorized environments, making early-stopping messaging accurate for the effective env count (`src/train_phase1.py`, `src/train_phase2.py`).
+
+### Fixed
+- Corrected evaluation frequency scaling for vectorized runs by converting desired timestep cadence into per-callback call units, ensuring Phase 1/2 evaluations always trigger and PhaseGuard can find `evaluations.npz` in production (`src/training_mode_utils.py`).
+
+## [1.4.2] - 2025-11-24
+### Added
+- Introduced a standalone CLI dashboard package (`dashboard/`) with log tailers, parsers, state aggregation, and Rich-based UI panels so the training phases and metrics can be monitored from a parallel Jupyter terminal (`dashboard/*.py`).
+- Added lightweight dashboard documentation outlining launch commands, configuration knobs, and extension hooks (`docs/dashboard.md`).
+- Created regression coverage for the dashboard parser/state flow to guarantee new log formats remain parseable (`tests/test_dashboard_parsers.py`, `tests/data/dashboard/sample.log`).
+
+### Changed
+- Updated dashboard state timestamps to use timezone-aware UTC values to avoid deprecation warnings during tests (`dashboard/state.py`).
+- Added import fallback in `dashboard/cli.py` so the dashboard can be executed directly via `python dashboard/cli.py` without package context issues.
+
+### Notes
+- Run `python dashboard/cli.py --log-glob "logs/pipeline*.log" --refresh 2` in a second terminal to view live metrics; adjust patterns/refresh via `dashboard/config.py` or a YAML file as described in the docs.
+
 ## [1.4.1] - 2025-11-24
 ### Added - Changelog Workflow Documentation 📋
 - **Comprehensive Changelog Workflow Section** ([CLAUDE.md](CLAUDE.md):719-825):

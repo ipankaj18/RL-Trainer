@@ -647,7 +647,11 @@ def train_phase1(
         safe_print(f"[TRAIN] Early stopping enabled:")
         safe_print(f"        - Stop after {PHASE1_CONFIG['early_stop_max_no_improvement']} evals with no improvement")
         safe_print(f"        - Minimum {PHASE1_CONFIG['early_stop_min_evals']} evals required")
-        safe_print(f"        - Evaluation every {PHASE1_CONFIG['eval_freq']:,} timesteps")
+        eval_cadence_steps = PHASE1_CONFIG['eval_freq'] * num_envs
+        safe_print(
+            f"        - Evaluation every {eval_cadence_steps:,} timesteps "
+            f"(~{PHASE1_CONFIG['eval_freq']:,} env steps across {num_envs} envs)"
+        )
     else:
         early_stop_callback = None
         safe_print("[TRAIN] Early stopping disabled")

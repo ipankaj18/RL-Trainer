@@ -1253,8 +1253,13 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False):
         safe_print(f"\n[TRAIN] Early stopping enabled:")
         safe_print(f"        - Stop after {PHASE2_CONFIG['early_stop_max_no_improvement']} evals with no improvement")
         safe_print(f"        - Minimum {PHASE2_CONFIG['early_stop_min_evals']} evals required")
-        safe_print(f"        - Evaluation every {PHASE2_CONFIG['eval_freq']:,} timesteps")
-        safe_print(f"        - Could stop as early as: {(PHASE2_CONFIG['early_stop_min_evals'] + PHASE2_CONFIG['early_stop_max_no_improvement']) * PHASE2_CONFIG['eval_freq']:,} timesteps")
+        eval_cadence_steps = PHASE2_CONFIG['eval_freq'] * num_envs
+        safe_print(
+            f"        - Evaluation every {eval_cadence_steps:,} timesteps "
+            f"(~{PHASE2_CONFIG['eval_freq']:,} env steps across {num_envs} envs)"
+        )
+        min_stop_evals = PHASE2_CONFIG['early_stop_min_evals'] + PHASE2_CONFIG['early_stop_max_no_improvement']
+        safe_print(f"        - Could stop as early as: {min_stop_evals * eval_cadence_steps:,} timesteps")
     else:
         early_stop_callback = None
         safe_print("[TRAIN] Early stopping disabled")

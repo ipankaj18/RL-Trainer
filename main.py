@@ -882,6 +882,19 @@ class RLTrainerMenu:
             print(f"{Colors.YELLOW}Check log: logs/pipeline_test_phase1.log{Colors.RESET}")
             return False
 
+        # Sanity check: even in test mode, ensure evaluation artifacts exist
+        try:
+            from pipeline.phase_guard import PhaseGuard
+
+            eval_path = PhaseGuard._find_newest_eval_file("logs/phase1")
+            if not Path(eval_path).exists():
+                print(f"\n{Colors.RED}✗ Phase 1 missing evaluation results at {eval_path}{Colors.RESET}")
+                print(f"{Colors.YELLOW}Pipeline stopped early so production guard would not be surprised.{Colors.RESET}")
+                return False
+        except Exception as exc:
+            print(f"\n{Colors.RED}✗ Failed to verify Phase 1 evaluation artifacts: {exc}{Colors.RESET}")
+            return False
+
         print(f"{Colors.GREEN}✓ Phase 1 completed in {phase1_duration:.1f} minutes{Colors.RESET}")
 
         # ============================================
@@ -914,6 +927,19 @@ class RLTrainerMenu:
         if not success:
             print(f"\n{Colors.RED}✗ Phase 2 failed. Pipeline stopped.{Colors.RESET}")
             print(f"{Colors.YELLOW}Check log: logs/pipeline_test_phase2.log{Colors.RESET}")
+            return False
+
+        # Sanity check: ensure Phase 2 evaluation exists in test mode as well
+        try:
+            from pipeline.phase_guard import PhaseGuard
+
+            eval_path = PhaseGuard._find_newest_eval_file("logs/phase2")
+            if not Path(eval_path).exists():
+                print(f"\n{Colors.RED}✗ Phase 2 missing evaluation results at {eval_path}{Colors.RESET}")
+                print(f"{Colors.YELLOW}Pipeline stopped to surface the missing eval artifact before production.{Colors.RESET}")
+                return False
+        except Exception as exc:
+            print(f"\n{Colors.RED}✗ Failed to verify Phase 2 evaluation artifacts: {exc}{Colors.RESET}")
             return False
 
         print(f"{Colors.GREEN}✓ Phase 2 completed in {phase2_duration:.1f} minutes{Colors.RESET}")

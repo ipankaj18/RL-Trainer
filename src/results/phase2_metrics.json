@@ -1,0 +1,20 @@
+{
+  "total_steps": 99,
+  "final_equity": 50362.5,
+  "total_return_pct": 0.7250000000000001,
+  "sharpe_ratio": 3.8189856873931176,
+  "max_drawdown_pct": 8.990286875988254,
+  "pm_actions_used": 0,
+  "pm_usage_pct": 0.0,
+  "action_distribution": {
+    "0": 98,
+    "1": 1
+  },
+  "done_reason": "minute_trailing_drawdown",
+  "observation_quality": {
+    "has_nan": false,
+    "has_inf": false,
+    "min": -230.0458221435547,
+    "max": 29389.05078125
+  }
+}

@@ -1,0 +1,236 @@
+# RL TRAINER - .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+# Paquetes Node.js
+node_modules/
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# PyCharm
+.idea/
+
+# VS Code (allow settings.json, extensions.json but ignore user-specific files)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# TensorBoard
+tensorboard_logs/*
+!tensorboard_logs/.gitkeep
+
+# Models (large files)
+models/*
+!models/.gitkeep
+*.h5
+*.keras
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.pb
+
+# Data files (large CSV/binary files)
+data/*
+!data/.gitkeep
+*.csv
+*.parquet
+*.feather
+*.hdf5
+*.h5
+
+# Results
+results/*
+!results/.gitkeep
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# LLM artifacts/cache
+artifacts/
+!artifacts/.gitkeep
+
+# Downloaded/External Training Frameworks
+SofT-GRPO-master/
+SofT-GRPO-master-main/
+SofT-GRPO-master-main/Soft-Thinking+noise+loss-main/
+
+# Downloaded Model Folders
+Phi-3-mini-4k-instruct/
+Phi-3-mini-128k-instruct/
+@Phi-3-mini-4k-instruct/
+
+# Base Model folder (keep folder structure, ignore contents)
+Base_Model/*
+!Base_Model/.gitkeep
+
+# Exception: Allow documentation images
+!img/*.png
+!img/*.jpg
+!img/*.jpeg
+!docs/**/*.png
+!docs/**/*.jpg
+
+# OS
+.DS_Store
+Thumbs.db
+*.Zone.Identifier
+*.swp
+*.swo
+*~
+.directory
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Package manager
+package-lock.json
+yarn.lock
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyright (allow project config, but can uncomment if you want user-specific configs)
+# pyrightconfig.json
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Profiling
+*.prof
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+
+# Keep instruction file
+!logs/.instructions_shown
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Package manager
+package-lock.json
+yarn.lock
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyright (allow project config, but can uncomment if you want user-specific configs)
+# pyrightconfig.json
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Profiling
+*.prof
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+
+# Keep instruction file
+!logs/.instructions_shown
+
+# Exclude Twitter/X marketing content
+docs/twitter_thread_content.md
+docs/twitter_thread_content_ES.md
+docs/x_posts.md
+
+# Production folders and files
+.kilocode/
+.claude/
+AGENTS.md
+Claude.md
+
+# Large temporary files
+zi4k6hf0
+ziPYwuK4
+zivalHEV
+
+zivalHEV

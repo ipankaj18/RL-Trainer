@@ -1,0 +1,75 @@
+# RL Trainer - AI Trading System Requirements
+# Python >= 3.11.9 required
+# Python 3.13 supported (with prebuilt wheels)
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# For Phase 3 LLM + LoRA fine-tuning:
+#   All required packages are included below (torch, transformers, peft, etc.)
+#   GPU with 8GB+ VRAM recommended for Phase 3 training
+
+# Core Dependencies (from TensorTrade)
+numpy>=1.26.4,<2.0
+pandas>=2.2.3
+gymnasium>=0.28.1
+pyyaml>=5.1.2
+matplotlib>=3.1.1
+ipython>=7.12.0
+deprecated>=1.2.13
+stochastic>=0.6.0
+plotly>=4.5.0
+
+# Deep Learning Framework
+tensorflow>=2.15.1
+
+# Reinforcement Learning
+# PINNED VERSIONS for Phase 1/2 compatibility (transfer learning fix)
+stable-baselines3==2.3.2  # Pinned for model compatibility
+sb3-contrib==2.3.0  # For MaskablePPO (Phase 1 & Phase 2 action masking)
+
+# UI/Progress Visualization
+colorama>=0.4.6
+tqdm>=4.65.0
+rich>=13.0.0
+
+# Data Processing
+# IMPORTANT: For Python 3.13 compatibility, use versions with prebuilt wheels
+# scipy 1.15.0+ has Python 3.13 wheels available (avoids Fortran compiler requirement)
+scipy>=1.15.0  # Changed from >=1.11.0,<1.14.0 for Python 3.13 support
+scikit-learn>=1.6.0  # Updated for compatibility with scipy 1.15+
+
+# Testing (optional)
+pytest>=5.1.1
+ta>=0.4.7
+
+# GPU Support (optional - uncomment if using GPU)
+# torch>=2.0.0  # For PyTorch-based components
+
+# LLM Integration (Phase 3 - required for hybrid RL+LLM agent)
+transformers>=4.35.0  # Hugging Face transformers
+torch>=2.1.0  # Required for LLM inference
+accelerate>=0.24.0  # Model acceleration and distributed training
+bitsandbytes>=0.41.0  # INT8/INT4 quantization (reduces VRAM usage)
+sentencepiece>=0.1.99  # Tokenizer support for Phi-3
+peft>=0.7.1  # LoRA/QLoRA fine-tuning (REQUIRED for Phase 3 adapter training)
+huggingface_hub>=0.22.0  # Offline snapshot downloads for LLM assets
+safetensors>=0.4.0  # Fast and safe tensor serialization (for model loading)
+
+# ============================================================================
+# Python Version Compatibility Notes:
+# ============================================================================
+# Python 3.13: All packages have prebuilt wheels (recommended)
+# Python 3.12: All packages have prebuilt wheels (recommended)
+# Python 3.11: All packages have prebuilt wheels (recommended)
+#
+# If you encounter issues with scipy on Python 3.13:
+# 1. Ensure you're using the latest pip: python -m pip install --upgrade pip
+# 2. Install from PyPI which has prebuilt wheels: pip install scipy>=1.15.0
+# 3. If building from source, you'll need Fortran compilers (gfortran on Linux/Mac,
+#    Intel Fortran or MinGW gfortran on Windows)
+#
+# Windows-specific notes:
+# - The scripts use UTF-8 encoding fallbacks for console output compatibility
+# - If you see encoding errors, ensure PYTHONIOENCODING=utf-8 is set
+# ============================================================================

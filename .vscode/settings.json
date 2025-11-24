@@ -1,0 +1,58 @@
+{
+    // Python Language Server Settings
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/src"
+    ],
+    "python.autoComplete.extraPaths": [
+        "${workspaceFolder}/src"
+    ],
+
+    // Pylance specific settings
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "off",
+
+    // Ensure src/ is recognized as a source root
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "warning",
+        "reportMissingModuleSource": "none",
+        "reportOptionalMemberAccess": "none",
+        "reportOptionalSubscript": "none",
+        "reportOptionalCall": "none",
+        "reportOptionalIterable": "none",
+        "reportOptionalContextManager": "none",
+        "reportOptionalOperand": "none",
+        "reportArgumentType": "none",
+        "reportAttributeAccessIssue": "none",
+        "reportOperatorIssue": "none",
+        "reportCallIssue": "none",
+        "reportGeneralTypeIssues": "none"
+    },
+
+    // File associations
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        "**/.pytest_cache": true
+    },
+
+    // Python formatting (optional, uncomment if desired)
+    // "python.formatting.provider": "black",
+    // "editor.formatOnSave": true,
+
+    // Testing
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+
+    // Environment
+    "python.envFile": "${workspaceFolder}/.env",
+
+    // Terminal
+    "terminal.integrated.env.linux": {
+        "PYTHONPATH": "${workspaceFolder}/src:${env:PYTHONPATH}"
+    },
+    "terminal.integrated.env.windows": {
+        "PYTHONPATH": "${workspaceFolder}/src;${env:PYTHONPATH}"
+    }
+}

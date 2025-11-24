@@ -1,0 +1,324 @@
+# Automated Sequential Pipeline Mode Configuration
+# Optimized for continuous execution with checkpointing and resource reallocation
+
+# Test Mode Configuration
+test_mode:
+  name: "pipeline"
+  description: "Automated sequential pipeline with checkpointing and resource reallocation"
+  enabled: true
+
+# Pipeline Configuration
+pipeline:
+  # Sequential Execution
+  auto_advance: true  # Automatically advance between phases
+  pause_between_phases: 5  # Seconds to pause for resource reallocation
+  
+  # Resource Reallocation
+  reallocate_resources: true
+  release_memory_between_phases: true
+  clear_cache_between_phases: false
+  
+  # Failure Handling
+  continue_on_failure: false
+  max_retries_per_phase: 2
+  rollback_on_failure: true
+
+# Hardware Configuration (shared across phases)
+hardware:
+  # GPU Settings
+  device: "cuda"
+  mixed_precision: true
+  memory_fraction: 0.90  # Leave headroom for phase transitions
+  
+  # Parallel Processing (balanced for sequential phases)
+  vectorized_envs: 8  # Fewer envs for better resource management
+  max_workers: 4      # Balanced thread pool
+  
+  # Memory Management
+  optimize_memory: true
+  memory_pooling: true
+  garbage_collection_interval: 100  # Steps between GC
+
+# Phase 1 Configuration (Environment Setup)
+phase1:
+  enabled: true
+  name: "Environment Setup"
+  
+  # Data Processing
+  validate_data: true
+  generate_features: true
+  cache_features: true
+  
+  # Timing
+  estimated_duration: 300  # seconds
+  timeout: 600  # seconds
+  
+  # Resources
+  gpu_usage: 0.3  # Lower GPU usage for data processing
+  memory_allocation: 4  # GB
+
+# Phase 2 Configuration (Base RL Training)
+phase2:
+  enabled: true
+  name: "Base RL Training"
+  
+  # Training Parameters (10% of production)
+  timesteps_reduction: 0.10
+  total_timesteps: 50000  # 10% of 500K production timesteps
+  
+  # PPO Configuration
+  learning_rate: 3.0e-4
+  n_steps: 512  # Smaller steps for sequential processing
+  batch_size: 256
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  normalize_advantage: true
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.01
+  
+  # Network (reduced complexity)
+  policy_kwargs:
+    net_arch:
+      pi: [256, 128]
+      vf: [256, 128]
+    activation_fn: "relu"
+    ortho_init: true
+  
+  # Resources
+  gpu_usage: 0.8  # High GPU usage for training
+  memory_allocation: 12  # GB
+  
+  # Timing
+  estimated_duration: 1800  # seconds (30 minutes)
+  timeout: 3600  # seconds (1 hour)
+
+# Phase 3 Configuration (Hybrid LLM Integration)
+phase3:
+  enabled: true
+  name: "Hybrid LLM Integration"
+  
+  # Training Parameters
+  timesteps_reduction: 0.10
+  total_timesteps: 25000  # Fewer timesteps for hybrid fine-tuning
+  
+  # PPO Configuration (inherits from Phase 2 but with adjustments)
+  learning_rate: 1.0e-4  # Lower LR for fine-tuning
+  n_steps: 256  # Smaller batches for LLM integration
+  batch_size: 128
+  n_epochs: 3  # Fewer epochs for fine-tuning
+  
+  # LLM Configuration
+  llm:
+    model_name: "microsoft/Phi-3-mini-4k-instruct"
+    quantization: "int8"
+    batch_inference: true
+    max_batch_size: 8
+    enable_cache: true
+    cache_size: 1000
+    
+    # Selective Querying
+    use_selective_querying: true
+    query_interval: 5
+    confidence_threshold: 0.7
+  
+  # Fusion Configuration
+  fusion:
+    llm_weight: 0.3
+    confidence_threshold: 0.7
+    enable_risk_veto: true
+  
+  # Resources
+  gpu_usage: 0.9  # Maximum GPU usage for hybrid training
+  memory_allocation: 16  # GB (LLM + RL)
+  
+  # Timing
+  estimated_duration: 1200  # seconds (20 minutes)
+  timeout: 2400  # seconds (40 minutes)
+
+# Checkpointing Configuration (critical for pipeline mode)
+checkpoint:
+  enabled: true
+  strategy: "phase_based"  # Checkpoint at end of each phase
+  
+  # Phase Checkpoints
+  save_phase1_state: true   # Save processed data and features
+  save_phase2_model: true   # Save base RL model
+  save_phase3_model: true   # Save hybrid model
+  
+  # Checkpoint Timing
+  phase1_interval: 1        # Once at end
+  phase2_interval: 5000     # Every 5000 steps
+  phase3_interval: 2500     # Every 2500 steps
+  
+  # Storage
+  dir: "models/checkpoints/pipeline"
+  keep_phase_checkpoints: true  # Keep phase-specific checkpoints
+  compress_checkpoints: true    # Compress to save space
+  
+  # Recovery
+  enable_recovery: true
+  auto_resume: true  # Auto-resume from last checkpoint
+
+# Resource Reallocation Configuration
+resource_reallocation:
+  enabled: true
+  
+  # Phase Transitions
+  release_gpu_between_phases: false  # Keep GPU allocated
+  clear_cache_on_transition: true
+  run_gc_on_transition: true
+  
+  # Memory Management
+  monitor_memory: true
+  max_memory_threshold: 0.95  # 95% memory usage triggers cleanup
+  memory_cleanup_interval: 100
+  
+  # GPU Reallocation
+  adjust_gpu_usage: true
+  gpu_usage_per_phase:
+    phase1: 0.3
+    phase2: 0.8
+    phase3: 0.9
+
+# LLM Configuration
+llm:
+  # Model Settings
+  model_name: "microsoft/Phi-3-mini-4k-instruct"
+  quantization: "int8"
+  device_map: "auto"
+  
+  # Caching
+  enable_cache: true
+  cache_size: 1000
+  cache_decay_rate: 0.8
+  
+  # Performance
+  max_new_tokens: 50
+  temperature: 0.1
+  top_p: 0.9
+  do_sample: true
+  use_flash_attention: true
+
+# Decision Fusion Configuration
+fusion:
+  llm_weight: 0.3
+  confidence_threshold: 0.7
+  use_selective_querying: true
+  query_interval: 5
+  enable_risk_veto: true
+  
+  risk:
+    max_consecutive_losses: 3
+    min_win_rate_threshold: 0.4
+    dd_buffer_threshold: 0.2
+
+# Environment Configuration
+environment:
+  # Vectorized Environments (shared across phases)
+  n_envs: 8
+  start_method: "spawn"
+  
+  # Parameters
+  initial_balance: 50000
+  window_size: 20
+  position_size_contracts: 1.0
+  
+  # Risk Management
+  initial_sl_multiplier: 1.5
+  initial_tp_ratio: 3.0
+  trailing_drawdown_limit: 2500
+  tighten_sl_step: 0.5
+  extend_tp_step: 1.0
+  trailing_activation_profit: 1.0
+
+# Performance Optimizations
+performance:
+  # Caching
+  cached_llm_features: true
+  feature_cache_size: 1000
+  
+  # Vectorization
+  vectorized_decision_fusion: true
+  vectorized_feature_engineering: true
+  
+  # Callbacks
+  batched_logging: true
+  log_batch_size: 10
+  
+  # Pooling
+  environment_state_pooling: true
+  env_pool_size: 4  # Smaller pool for sequential processing
+  
+  # Optimization Flags
+  compile_torch_modules: false
+  enable_cuda_graph: false
+
+# Monitoring Configuration
+monitoring:
+  # Hardware Monitoring
+  monitor_gpu: true
+  monitor_memory: true
+  monitor_cpu: true
+  log_interval: 5  # Seconds between metrics
+  
+  # Phase Monitoring
+  track_phase_durations: true
+  track_phase_transitions: true
+  track_resource_usage: true
+  
+  # Performance Tracking
+  track_inference_time: true
+  track_feature_calculation_time: true
+  track_fusion_time: true
+  
+  # Targets
+  target_gpu_utilization: 85.0  # Slightly lower for pipeline mode
+  min_gpu_utilization: 80.0
+  
+  # Logging
+  log_level: "INFO"
+  log_interval_steps: 100
+  save_metrics: true
+  metrics_file: "logs/hardware_metrics_pipeline.csv"
+
+# Data Configuration
+data:
+  # Data Loading
+  preload_data: true
+  data_fraction: 0.10  # 10% for testing
+  
+  # Processing
+  num_workers: 2  # Fewer workers for sequential processing
+  pin_memory: true
+  prefetch_factor: 2
+
+# Testing Configuration
+testing:
+  n_eval_episodes: 5
+  eval_interval: 5000
+  deterministic_eval: true
+  
+  # Mock Settings
+  mock_llm: false
+  mock_response_delay: 0.01
+  mock_confidence: 0.8
+
+# Validation Targets
+validation:
+  min_gpu_utilization: 85.0
+  max_total_execution_time: 5400  # 1.5 hours total
+  min_cache_hit_rate: 0.70
+  max_memory_usage: 20.0  # GB
+  
+  # Phase-specific targets
+  phase1_max_duration: 600   # 10 minutes
+  phase2_max_duration: 3600  # 1 hour
+  phase3_max_duration: 2400  # 40 minutes
+  
+  # Pipeline targets
+  max_phase_transition_time: 30  # Seconds
+  checkpoint_success_rate: 1.0   # 100% checkpoint success required

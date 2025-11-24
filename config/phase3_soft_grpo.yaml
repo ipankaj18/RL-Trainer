@@ -1,0 +1,114 @@
+# Phase 3 Stage 2: SofT-GRPO runner configuration
+#
+# This file controls how the Stage 2 pipeline exports datasets from the Phase 3
+# LoRA experience buffer and how it launches the SofT-GRPO reasoning trainer.
+
+soft_grpo:
+  # Where manifests and adapters live (relative to project root)
+  model_root: "./models/phase3_hybrid"
+  manifest_name: "phase3_stage_manifest.json"
+
+  # Dataset + log directories (created automatically when needed)
+  dataset_root: "./data/soft_grpo"
+  experience_filename: "stage1_experience.jsonl"
+  train_filename: "stage2_train.parquet"
+  val_filename: "stage2_val.parquet"
+  jsonl_snapshot: "stage2_samples.jsonl"
+  metadata_filename: "dataset_metadata.json"
+  logs_dir: "./logs/soft_grpo"
+  tensorboard_dir: "./tensorboard_logs/phase3/soft_grpo"
+
+  # Where to save the exported LoRA adapters from Stage 1
+  lora_subdir: "stage1_lora"
+
+  # Default SofT-GRPO repository location (clone already provided)
+  repo_root: "./SofT-GRPO-master-main"
+
+dataset:
+  ability_label: "trading"
+  data_source: "phase3_stage1"
+  min_reward: -10.0
+  min_success_pnl: 0.0
+  include_failures: true
+  max_samples: 8000
+  val_split: 0.1
+  random_seed: 42
+  action_names:
+    0: "HOLD"
+    1: "BUY"
+    2: "SELL"
+    3: "MOVE_TO_BE"
+    4: "ENABLE_TRAIL"
+    5: "DISABLE_TRAIL"
+
+runner:
+  mode: "python"  # python | script
+  python_module: "verl.trainer.main_ppo"
+  script_path: "./SofT-GRPO-master-main/SofT-GRPO-deepscaler-8k-llama3.sh"
+  env:
+    CUDA_VISIBLE_DEVICES: "0,1"
+    PYTHONUNBUFFERED: "1"
+    SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK: "True"
+  args:
+    algorithm.adv_estimator: "grpo"
+    data.train_files: "{train_dataset}"
+    data.val_files: "[{val_dataset}]"
+    data.train_batch_size: 32
+    data.val_batch_size: 64
+    data.max_prompt_length: 2048
+    data.max_response_length: 3072
+    data.filter_overlong_prompts: "True"
+    actor_rollout_ref.model.path: "{base_model_path}"
+    actor_rollout_ref.model.override_config.attn_implementation: "eager"
+    actor_rollout_ref.model.use_remove_padding: "False"
+    actor_rollout_ref.model.use_fused_kernels: "False"
+    actor_rollout_ref.model.lora_rank: 16  # Enable LoRA with rank 16 (matches Stage 1)
+    actor_rollout_ref.model.lora_alpha: 32  # LoRA scaling factor (matches Stage 1)
+    actor_rollout_ref.model.target_modules: "all-linear"  # Target all linear layers
+    actor_rollout_ref.actor.optim.lr: 5e-6
+    actor_rollout_ref.actor.ppo_mini_batch_size: 16
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu: 2
+    actor_rollout_ref.rollout.name: "sglang"
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu: 2  # Required for log prob computation
+    actor_rollout_ref.rollout.enable_soft_thinking: "True"
+    actor_rollout_ref.rollout.add_noise_gumbel_softmax: "True"
+    actor_rollout_ref.rollout.gumbel_softmax_temperature: 0.2
+    actor_rollout_ref.rollout.n: 4
+    actor_rollout_ref.rollout.top_k: 5
+    actor_rollout_ref.rollout.top_p: 0.95
+    actor_rollout_ref.rollout.temperature: 0.8
+    actor_rollout_ref.rollout.max_model_len: 6144
+    actor_rollout_ref.ref.strategy: "fsdp2"
+    critic.model.override_config.attn_implementation: "eager"
+    critic.model.use_remove_padding: "False"
+    trainer.logger: "['console','tensorboard']"
+    trainer.project_name: "phase3-soft-grpo"
+    trainer.experiment_name: "{market}-soft-stage2"
+    trainer.save_freq: 50
+    trainer.test_freq: 10
+    trainer.default_local_dir: "{output_dir}"
+    trainer.total_epochs: 1
+    trainer.n_gpus_per_node: 2
+    trainer.nnodes: 1
+  test_overrides:
+    data.train_batch_size: 4
+    data.val_batch_size: 4
+    data.max_prompt_length: 1024
+    data.max_response_length: 1536
+    actor_rollout_ref.actor.ppo_mini_batch_size: 4  # Must be <= train_batch_size
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu: 1
+    actor_rollout_ref.rollout.n: 1
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu: 1
+    actor_rollout_ref.rollout.max_model_len: 4096
+    actor_rollout_ref.rollout.max_num_batched_tokens: 4096
+    actor_rollout_ref.rollout.gpu_memory_utilization: 0.35
+    actor_rollout_ref.rollout.tensor_model_parallel_size: 1  # Single GPU pod can't shard rollout TP
+    actor_rollout_ref.model.override_config.attn_implementation: "eager"
+    actor_rollout_ref.model.use_remove_padding: "False"
+    actor_rollout_ref.model.use_fused_kernels: "False"
+    critic.model.override_config.attn_implementation: "eager"
+    critic.model.use_remove_padding: "False"
+    trainer.total_epochs: 1
+    trainer.n_gpus_per_node: 1  # Match available GPUs in Pod
+    trainer.save_freq: 1
+    trainer.test_freq: 1

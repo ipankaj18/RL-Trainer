@@ -1,0 +1,292 @@
+# Checkpoint Management Configuration
+# Dynamic checkpoint strategy for RL trading system
+# Used by DynamicCheckpointManager in all training phases
+
+checkpointing:
+  # Phase-specific base intervals (timesteps)
+  phase1:
+    base_interval: 25000        # 25K steps for Phase 1 (higher volatility)
+    max_interval_multiplier: 5  # Grows to 5x base (125K) as training stabilizes
+    target_timesteps: 2000000   # Default Phase 1 target
+
+  phase2:
+    base_interval: 50000        # 50K steps for Phase 2
+    max_interval_multiplier: 5  # Grows to 5x base (250K)
+    target_timesteps: 5000000   # Default Phase 2 target
+
+  phase3:
+    base_interval: 10000        # 10K steps for Phase 3 (LLM can diverge quickly)
+    max_interval_multiplier: 5  # Grows to 5x base (50K)
+    target_timesteps: 5000000   # Default Phase 3 target
+
+  # Event-driven save triggers
+  events:
+    enabled: true
+
+    # Save when validation metric improves by this threshold
+    metric_improvement_threshold: 0.02  # 2% improvement triggers save
+
+    # Metrics to monitor (any improvement triggers save)
+    monitored_metrics:
+      - val_reward      # Primary: mean validation reward
+      - sharpe_ratio    # Financial metric
+      - win_rate        # Trading performance
+
+    # Force checkpoint at these special events
+    triggers:
+      - periodic        # Regular interval-based saves
+      - best            # New best validation metric
+      - phase_end       # End of training phase
+      - interrupt       # Ctrl+C or exception
+      - phase_boundary  # Curriculum transitions (e.g., instrument changes)
+
+  # Retention policy
+  retention:
+    enabled: true
+
+    # Keep last N regular (periodic) checkpoints per market
+    keep_last_n: 8
+
+    # Keep top K checkpoints by Sharpe ratio per phase
+    keep_top_k_by_sharpe: 3
+
+    # Keep top K checkpoints by validation reward per phase
+    keep_top_k_by_reward: 2
+
+    # Never prune these event types
+    preserve_events:
+      - phase_end
+      - phase_boundary
+      - interrupt
+
+    # Prune checkpoints older than N days (0 = disabled)
+    max_age_days: 0  # Disabled by default (metric-based retention only)
+
+    # Run pruning every N checkpoint saves to avoid I/O overhead
+    prune_frequency: 10
+
+  # Checkpoint directory structure
+  paths:
+    phase1: "./models/phase1/{market}/checkpoints/"
+    phase2: "./models/phase2/{market}/checkpoints/"
+    phase3: "./models/phase3_hybrid/{market}/checkpoints/"
+
+    # Best model paths (unchanged from existing structure)
+    phase1_best: "./models/phase1/"
+    phase2_best: "./models/phase2/"
+    phase3_best: "./models/phase3_hybrid/"
+
+  # Checkpoint naming pattern
+  naming:
+    # Format: {market}_ts-{timesteps:07d}_evt-{event}_val-{val_reward:+.3f}_sharpe-{sharpe:+.2f}_seed-{seed}.zip
+    # Examples:
+    #   NQ_ts-0025000_evt-periodic_val-+0.112_sharpe-+1.45_seed-42.zip
+    #   ES_ts-0150000_evt-best_val-+0.238_sharpe-+1.92_seed-7.zip
+    #   YM_ts-0400000_evt-phase_end_val-+0.301_sharpe-+2.10_seed-3.zip
+
+    format: "{market}_ts-{timesteps:07d}_evt-{event}_val-{val_reward:+.3f}_sharpe-{sharpe:+.2f}_seed-{seed}"
+    extension: ".zip"
+
+    # Companion files use same base name
+    vecnormalize_suffix: "_vecnormalize.pkl"
+    metadata_suffix: "_metadata.json"
+
+  # Metadata fields to include in checkpoint JSON
+  metadata:
+    standard_fields:
+      - phase           # 1, 2, or 3
+      - market          # ES, NQ, YM, etc.
+      - timesteps       # Actual timesteps at checkpoint
+      - seed            # Random seed for reproducibility
+      - event_tag       # periodic, best, phase_end, etc.
+      - timestamp       # ISO timestamp of checkpoint creation
+
+    metrics_fields:
+      - val_reward      # Mean validation episode reward
+      - sharpe_ratio    # Sharpe ratio from eval episodes
+      - win_rate        # Win rate (% profitable episodes)
+      - max_drawdown    # Maximum drawdown from eval
+      - total_return    # Cumulative return from eval
+
+    runtime_fields:
+      - training_elapsed_seconds  # Wall-clock time elapsed
+      - eval_episodes_run         # Total eval episodes completed
+      - n_envs                    # Number of parallel environments
+      - learning_rate             # Current learning rate
+
+    # Phase 3 specific fields (LLM)
+    llm_fields:
+      - reasoning_usage_rate      # % of decisions using LLM
+      - llm_confidence_avg        # Average LLM confidence
+      - rl_llm_agreement_rate     # % of RL-LLM agreement
+
+  # Performance & safety
+  performance:
+    # Use atomic writes (temp file + rename) to prevent corruption
+    atomic_saves: true
+
+    # Disk space safety: stop saving checkpoints if free space below threshold
+    min_disk_space_gb: 5.0
+
+    # Compress checkpoints (SB3 uses .zip natively)
+    compression: true
+
+    # Parallel checkpoint saves (experimental - may cause issues)
+    async_saves: false
+
+  # Logging
+  logging:
+    # Log checkpoint events to console
+    verbose: true
+
+    # Log checkpoint metadata to TensorBoard
+    tensorboard_logging: true
+
+    # Create checkpoint manifest JSON (list of all checkpoints with metadata)
+    create_manifest: true
+    manifest_filename: "checkpoint_manifest.json"
+
+# Self-Correcting System Configuration
+# Advanced control loop for automatic quality monitoring and corrective actions
+
+metric_forecaster:
+  enabled: true
+
+  # Primary metric to forecast
+  metric_name: "sharpe_ratio"  # Can be: sharpe_ratio, val_reward, win_rate
+
+  # Kalman Filter parameters
+  kalman:
+    process_noise: 0.01         # Process noise covariance (Q)
+    measurement_noise: 0.05     # Measurement noise covariance (R)
+
+  # Trend detection thresholds
+  trend_detection:
+    plateau_threshold: 0.02     # 2% change considered plateau
+    divergence_threshold: -0.10  # -10% change considered diverging
+    min_samples: 5              # Minimum samples before trend detection
+
+  # Historical data retention
+  history_size: 50              # Number of observations to keep
+
+  # Forecasting horizon
+  forecast_steps: 5             # Predict N steps ahead
+
+policy_controller:
+  enabled: true
+
+  # Learning rate adjustment
+  learning_rate:
+    enabled: true
+    reduction_factor: 0.5       # Reduce by 50% on plateau/divergence
+    min_lr: 1e-5                # Never go below this LR
+    trigger_on:
+      - plateau                 # Trigger on plateau detection
+      - diverging               # Trigger on diverging trend
+
+  # Entropy coefficient adjustment (exploration)
+  entropy:
+    enabled: true
+    increase_factor: 2.0        # Double entropy on oscillation
+    max_ent: 0.1                # Maximum entropy coefficient
+    trigger_on:
+      - oscillating             # Trigger on oscillating performance
+
+  # Clip range adjustment (PPO stability)
+  clip_range:
+    enabled: false              # Disabled by default (advanced)
+    reduction_factor: 0.8       # Reduce by 20% on high KL divergence
+    min_clip: 0.05              # Minimum clip range
+    trigger_on:
+      - diverging               # Trigger on diverging policy
+
+  # Adjustment cooldown (prevent rapid changes)
+  cooldown_steps: 100000        # Wait N steps between adjustments
+
+corrective_actions:
+  enabled: true
+
+  # Multi-level intervention strategy
+  levels:
+    # Level 1: Warning - log alert, continue training
+    warning:
+      enabled: true
+      log_to_file: true
+      log_path: "./logs/corrective_actions.json"
+
+    # Level 2: Adjust - modify hyperparameters via policy controller
+    adjust:
+      enabled: true
+      max_adjustments: 5        # Max adjustments per training run
+
+    # Level 3: Rollback - load best checkpoint and resume
+    rollback:
+      enabled: true
+      max_rollbacks: 2          # Max rollbacks per training run
+      lookback_timesteps: 500000  # Search for best checkpoint within last N steps
+
+    # Level 4: Stop - halt training, require manual intervention
+    stop:
+      enabled: true
+      require_confirmation: true  # Require user confirmation to resume
+
+  # Trigger conditions for rollback
+  rollback_triggers:
+    # Sharpe ratio drop >20% from recent best
+    sharpe_drop_threshold: 0.20  # 20% drop triggers rollback
+
+    # Reward becomes NaN or Inf
+    nan_inf_detection: true
+
+    # Sustained divergence with high confidence
+    sustained_divergence:
+      enabled: true
+      min_confidence: 0.75      # Forecaster confidence threshold
+      consecutive_evals: 3      # Number of consecutive diverging evals
+
+  # Trigger conditions for stop
+  stop_triggers:
+    # Critical metric degradation
+    critical_sharpe_drop: 0.50  # 50% drop -> emergency stop
+
+    # Apex compliance violation
+    compliance_violation: true
+
+    # Repeated rollback failures
+    max_failed_rollbacks: 2
+
+background_evaluator:
+  enabled: false                # Disabled by default (experimental)
+
+  # Evaluation interval (seconds)
+  interval: 120                 # Evaluate every 2 minutes
+
+  # Number of episodes per background evaluation
+  n_episodes: 5                 # Quick evaluation (deterministic)
+
+  # Threading configuration
+  threading:
+    daemon: true                # Daemon thread (exits with main)
+    priority: "low"             # Thread priority (low/normal/high)
+
+  # Metric queue size
+  queue_size: 100               # Max metrics in queue
+
+  # Timeout settings
+  timeout:
+    evaluation: 300             # Max 5 minutes per evaluation
+    shutdown: 10                # Max 10 seconds for graceful shutdown
+
+# Global registry configuration
+checkpoint_registry:
+  enabled: true
+
+  # Registry file path
+  registry_path: "./models/registry.json"
+
+  # Auto-save frequency
+  auto_save: true
+  save_on_register: true        # Save registry on each checkpoint registration
+
+  # Index maintenance
+  rebuild_on_startup: false     # Rebuild indices on load (slow for large registries)

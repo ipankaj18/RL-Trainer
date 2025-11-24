@@ -1,0 +1,57 @@
+{
+    "include": [
+        "src",
+        "tests",
+        "main.py"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        "**/.pytest_cache",
+        "**/node_modules",
+        "**/.venv",
+        "**/venv",
+        "data",
+        "models",
+        "logs",
+        "results",
+        "tensorboard_logs"
+    ],
+    "extraPaths": [
+        "src"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "src",
+            "pythonVersion": "3.12",
+            "pythonPlatform": "Linux",
+            "extraPaths": [
+                "src"
+            ]
+        },
+        {
+            "root": "tests",
+            "pythonVersion": "3.12",
+            "pythonPlatform": "Linux",
+            "extraPaths": [
+                "src"
+            ]
+        }
+    ],
+    "reportMissingImports": "warning",
+    "reportMissingTypeStubs": false,
+    "reportOptionalMemberAccess": "none",
+    "reportOptionalSubscript": "none",
+    "reportOptionalCall": "none",
+    "reportOptionalIterable": "none",
+    "reportOptionalContextManager": "none",
+    "reportOptionalOperand": "none",
+    "reportArgumentType": "none",
+    "reportAttributeAccessIssue": "none",
+    "reportOperatorIssue": "none",
+    "reportCallIssue": "none",
+    "reportGeneralTypeIssues": "none",
+    "typeCheckingMode": "off",
+    "useLibraryCodeForTypes": true,
+    "venvPath": ".",
+    "venv": "venv"
+}

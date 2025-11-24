@@ -1,0 +1,200 @@
+# Hardware-Maximized Validation Mode Configuration
+# Optimized for maximum GPU/CPU utilization with reduced timesteps
+
+# Test Mode Configuration
+test_mode:
+  name: "hardware_maximized"
+  description: "Maximum GPU utilization with parallel vectorized environments"
+  enabled: true
+
+# Hardware Configuration
+hardware:
+  # GPU Settings
+  device: "cuda"  # Force GPU usage
+  mixed_precision: true  # Enable mixed precision for faster training
+  memory_fraction: 0.95  # Use 95% of available GPU memory
+  
+  # Parallel Processing
+  vectorized_envs: 32  # Maximum parallel environments for GPU saturation
+  n_envs_per_gpu: 8    # Environments per GPU (adjust based on VRAM)
+  max_workers: 8       # Thread pool workers for data loading
+  
+  # Memory Optimization
+  optimize_memory: true
+  memory_pooling: true
+  gradient_checkpointing: false  # Enable for very large models
+
+# Training Configuration (10% of production)
+training:
+  # Reduced timesteps for testing
+  timesteps_reduction: 0.10  # 10% of production timesteps
+  
+  # PPO Hyperparameters (optimized for GPU)
+  learning_rate: 3.0e-4
+  n_steps: 2048  # Steps per environment before update
+  batch_size: 1024  # Large batch for GPU parallelism
+  n_epochs: 5  # Reduced from 10 for faster testing
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  clip_range_vf: null
+  normalize_advantage: true
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  use_sde: false
+  sde_sample_freq: -1
+  target_kl: 0.01
+  
+  # Network Architecture (reduced complexity)
+  policy_kwargs:
+    net_arch:
+      pi: [256, 128]  # Reduced from [512, 256, 128]
+      vf: [256, 128]  # Reduced from [512, 256, 128]
+    activation_fn: "relu"
+    ortho_init: true
+    optimizer_class: "Adam"
+    optimizer_kwargs:
+      eps: 1.0e-5
+      betas: [0.9, 0.999]
+
+# LLM Configuration
+llm:
+  # Model Selection
+  model_name: "microsoft/Phi-3-mini-4k-instruct"
+  quantization: "int8"  # int8 for testing, int4 for production
+  device_map: "auto"
+  
+  # Batch Processing
+  batch_inference: true
+  max_batch_size: 16  # Batch LLM queries for GPU efficiency
+  batch_timeout: 0.1  # Maximum time to wait for batch to fill
+  
+  # Caching
+  enable_cache: true
+  cache_size: 2000  # Larger cache for batch processing
+  cache_decay_rate: 0.8
+  
+  # Performance
+  max_new_tokens: 50
+  temperature: 0.1
+  top_p: 0.9
+  do_sample: true
+  use_flash_attention: true
+  compile_model: false  # Set to true for PyTorch 2.0+
+
+# Decision Fusion Configuration
+fusion:
+  llm_weight: 0.3
+  confidence_threshold: 0.7
+  use_selective_querying: true
+  query_interval: 5
+  enable_risk_veto: true
+  
+  # Risk Management
+  risk:
+    max_consecutive_losses: 3
+    min_win_rate_threshold: 0.4
+    dd_buffer_threshold: 0.2
+
+# Environment Configuration
+environment:
+  # Vectorized Environments
+  n_envs: 32
+  start_method: "spawn"  # For CUDA compatibility
+  
+  # Environment Parameters
+  initial_balance: 50000
+  window_size: 20
+  position_size_contracts: 1.0
+  
+  # Risk Parameters
+  initial_sl_multiplier: 1.5
+  initial_tp_ratio: 3.0
+  trailing_drawdown_limit: 2500
+  tighten_sl_step: 0.5
+  extend_tp_step: 1.0
+  trailing_activation_profit: 1.0
+
+# Performance Optimizations
+performance:
+  # Feature Caching
+  cached_llm_features: true
+  feature_cache_size: 2000
+  
+  # Vectorization
+  vectorized_decision_fusion: true
+  vectorized_feature_engineering: true
+  
+  # Callback Optimization
+  batched_logging: true
+  log_batch_size: 10
+  
+  # Environment Pooling
+  environment_state_pooling: true
+  env_pool_size: 8
+  
+  # Compilation
+  compile_torch_modules: false  # Enable for PyTorch 2.0+
+  enable_cuda_graph: false  # Experimental feature
+
+# Monitoring Configuration
+monitoring:
+  # Hardware Monitoring
+  monitor_gpu: true
+  monitor_memory: true
+  monitor_cpu: true
+  log_interval: 1  # Seconds between metric collection
+  
+  # Performance Metrics
+  track_inference_time: true
+  track_feature_calculation_time: true
+  track_fusion_time: true
+  
+  # Validation
+  target_gpu_utilization: 90.0  # Target >90% GPU utilization
+  min_gpu_utilization: 85.0    # Minimum acceptable
+  
+  # Logging
+  log_level: "INFO"
+  log_interval_steps: 100
+  save_metrics: true
+  metrics_file: "logs/hardware_metrics_hardware_maximized.csv"
+
+# Checkpointing
+checkpoint:
+  enabled: true
+  save_interval: 5000  # Steps between checkpoints
+  keep_last: 3         # Keep last N checkpoints
+  dir: "models/checkpoints/hardware_maximized"
+  save_replay_buffer: false  # Save memory by not saving replay buffer
+
+# Data Configuration
+data:
+  # Data Loading
+  preload_data: true
+  data_fraction: 0.10  # Use 10% of data for testing
+  
+  # Data Processing
+  num_workers: 4  # Parallel data loading
+  pin_memory: true  # Pin memory for faster GPU transfer
+  prefetch_factor: 2
+
+# Testing Configuration
+testing:
+  # Test Parameters
+  n_eval_episodes: 5
+  eval_interval: 5000
+  deterministic_eval: true
+  
+  # Mock Settings (for testing without GPU)
+  mock_llm: false  # Set to true for testing without GPU
+  mock_response_delay: 0.01  # Artificial delay in seconds
+  mock_confidence: 0.8
+
+# Validation Targets (must be achieved)
+validation:
+  min_gpu_utilization: 90.0  # Must maintain >90% GPU utilization
+  max_execution_time: 3600   # Must complete within 1 hour
+  min_cache_hit_rate: 0.70   # Must achieve >70% cache hit rate
+  max_memory_usage: 24.0     # Must stay under 24GB GPU memory

@@ -1,0 +1,171 @@
+# LLM Configuration for Phase 3 Trading Agent
+#
+# CURRENT MODE: PURE RL (LLM DISABLED)
+# Phase 3 uses 261D observations but does NOT query the LLM
+# This provides 80% of hybrid benefits with 0% complexity
+#
+# To re-enable LLM in the future:
+# 1. Set mock_mode=False in train_phase3_llm.py (line 1219)
+# 2. Download Phi-3-mini-4k-instruct or FinGPT model
+# 3. Set use_selective_querying: true (line 20)
+# 4. Set llm_weight: 0.15 (line 18)
+# 5. Run 50K test to validate before full training
+
+# LLM Model Selection (Not used in current PURE RL mode)
+llm_model:
+  name: "microsoft/Phi-3-mini-4k-instruct"  # 3.8B parameters, ~4GB VRAM with INT8
+  local_path: "Base_Model"  # Fixed path to manually downloaded model
+  quantization: "int8"  # Options: int8, int4, none
+  device: "auto"  # Options: auto, cuda, cpu
+  max_new_tokens: 40  # Shorter responses for latency and decisiveness
+  temperature: 0.7  # Higher to encourage varied, decisive outputs
+  top_p: 0.9  # Nucleus sampling parameter
+  do_sample: true  # Enable sampling for more decisive outputs
+
+# Decision Fusion Parameters
+# PHASE 3 PURE RL MODE: LLM completely disabled
+fusion:
+  llm_weight: 0.0  # LLM disabled - Phase 3 runs pure RL with 261D observations
+  confidence_threshold: 0.60  # Kept for potential future use
+  use_selective_querying: false  # DISABLED - Stop all LLM queries
+  always_on_thinking: false  # DISABLED - Stop async background queries
+  query_interval: 999999  # Effectively infinite (no queries)
+  query_cooldown: 999999  # Effectively infinite (no queries)
+  cache_llm_responses: false  # No caching needed (no queries)
+  cache_decay_rate: 0.8  # Kept for potential future use
+
+# Feature Configuration
+features:
+  use_llm_features: true  # Enable 261D observations
+  observation_dim: 261  # Extended observation dimension
+  account_features: true  # Include account state in observations
+  trade_memory_features: true  # Include trade history in observations
+  risk_features: true  # Include risk metrics in observations
+  pattern_features: true  # Include pattern recognition in observations
+
+# Risk Management Configuration
+risk:
+  max_consecutive_losses: 3  # Block new entries after this many losses
+  min_win_rate_threshold: 0.4  # Block entries if win rate below this
+  dd_buffer_threshold: 0.2  # Block aggressive actions if DD buffer < this
+  enable_risk_veto: true  # Enable risk-based action veto
+
+# Prompt Templates
+prompts:
+  system: |
+    You are an expert futures trader with proven profitability across all markets.
+    You strictly follow Apex Trader Funding rules and risk management principles.
+
+    === CORE TRADING RULES ===
+
+    1. TREND ANALYSIS (ADX-based):
+       - STRONG TREND (ADX > 30): Trade WITH trend only, high confidence
+       - MODERATE TREND (ADX 20-30): Trade with caution, normal confidence
+       - WEAK TREND (ADX < 20): Prefer HOLD, very low confidence entries
+
+    2. MOMENTUM CONFIRMATION:
+       - Momentum > 0 + Price > VWAP = BULLISH bias → Consider BUY
+       - Momentum < 0 + Price < VWAP = BEARISH bias → Consider SELL
+       - Conflicting signals = HOLD or reduce confidence
+
+    3. RSI OVERBOUGHT/OVERSOLD:
+       - RSI > 70: Overbought → Avoid BUY, consider SELL if trend confirms
+       - RSI < 30: Oversold → Avoid SELL, consider BUY if trend confirms
+       - RSI 40-60: Neutral zone, rely on trend/momentum
+
+    4. RISK MANAGEMENT (CRITICAL):
+       - Consecutive losses >= 3: MUST output HOLD | 0.0 | Risk protection
+       - Win rate < 40%: Reduce confidence by 50%, prefer HOLD
+       - Unrealized loss > -$500: Consider exit, do NOT add to losers
+
+    5. POSITION MANAGEMENT:
+       - Unrealized profit > +$150: Recommend MOVE_TO_BE (breakeven stop)
+       - Unrealized profit > +$300: Recommend ENABLE_TRAIL (lock profits)
+       - Choppy market (ADX < 20): Recommend DISABLE_TRAIL (avoid whipsaw)
+
+    === OUTPUT FORMAT (STRICT) ===
+    ACTION | confidence | brief_reason
+
+    Examples:
+    - "BUY | 0.85 | Strong uptrend ADX 42 above VWAP"
+    - "HOLD | 0.0 | Risk protection 3 losses"
+    - "MOVE_TO_BE | 0.90 | Profit +$200 protect capital"
+    - "SELL | 0.70 | Bearish momentum RSI 75"
+
+    Available actions: HOLD, BUY, SELL, MOVE_TO_BE, ENABLE_TRAIL, DISABLE_TRAIL
+
+    === KEY PRINCIPLES ===
+    - Capital preservation > profit seeking
+    - Never fight strong trends (ADX > 30)
+    - Respect losing streaks (3+ losses = HOLD)
+    - Use position management to lock profits
+
+  context_template: |
+    === MARKET: {market_name} ===
+    Time: {current_time} ET | Price: ${current_price:.2f}
+
+    === TREND & MOMENTUM ===
+    ADX: {adx:.1f} → Trend Strength: {trend_interpretation}
+    Momentum: {momentum:+.2f} → Direction: {momentum_interpretation}
+    VWAP Distance: {vwap_distance:+.2%} → Price Position: {vwap_interpretation}
+    RSI: {rsi:.1f} → Condition: {rsi_interpretation}
+
+    === POSITION STATUS ===
+    Current Position: {position_status}
+    Unrealized P&L: ${unrealized_pnl:+.0f}
+
+    === RISK METRICS ===
+    Win Rate: {win_rate:.1%} {win_rate_warning}
+    Consecutive Losses: {consecutive_losses} {loss_streak_warning}
+    Account Balance: ${balance:.0f}
+    Last 3 Trades: {last_3_trades}
+
+    === DECISION REQUIRED ===
+    Based on the above analysis, what is your recommended action?
+    Remember: Follow the trading rules strictly. Prioritize risk management.
+
+# Performance Optimization
+performance:
+  enable_cuda_graph: false  # Enable for better GPU performance (requires PyTorch 2.0+)
+  use_flash_attention: true  # Use Flash Attention if available
+  compile_model: false  # Compile model for faster inference (PyTorch 2.0+)
+  batch_inference: false  # Enable batching for multiple queries
+  max_batch_size: 8  # Maximum batch size for inference
+
+# Logging and Monitoring
+logging:
+  log_llm_queries: true  # Log all LLM queries and responses
+  log_decision_fusion: true  # Log fusion decisions
+  log_risk_veto: true  # Log risk-based vetoes
+  log_latency: true  # Log LLM inference latency
+  save_llm_responses: true  # Save LLM responses to file (for analysis)
+
+# Model Fallback Options
+fallback:
+  enable_rl_fallback: true  # Fall back to RL if LLM fails
+  enable_hold_fallback: true  # Default to HOLD if both fail
+  max_llm_errors: 10  # Switch to RL-only after this many errors
+  error_cooldown_period: 100  # Steps to wait before retrying LLM after error
+
+# Development and Testing
+development:
+  verbose_logging: false  # Enable verbose logging for debugging
+
+# Checkpoint Configuration (Phase 3 specific)
+# Main checkpoint config is in config/checkpoint_config.yaml
+# These settings override defaults for Phase 3 LLM training
+checkpointing:
+  # Use base settings from checkpoint_config.yaml
+  use_default_config: true
+
+  # Phase 3 specific overrides
+  base_interval: 10000  # 10K steps (LLM can diverge quickly)
+
+  # Additional LLM-specific metadata fields
+  llm_metadata:
+    - reasoning_usage_rate      # % of decisions using LLM
+    - llm_confidence_avg        # Average LLM confidence
+    - rl_llm_agreement_rate     # % of RL-LLM agreement
+    - llm_error_count          # Cumulative LLM errors
+    - fusion_override_count    # Times LLM overrode RL
+    - risk_veto_count          # Times risk system vetoed decision

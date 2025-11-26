@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from dashboard.parsers import ParserContext, parse_line
+from dashboard.parsers import ParserContext, parse_line, SectionEvent
 from dashboard.state import DashboardState
 
 
@@ -42,3 +42,21 @@ def test_dashboard_state_tracks_sections() -> None:
     assert sections[0].values["loss"] == 0.2
     history = state.history_for("train", "loss")
     assert len(history) == 2
+
+
+def test_table_rows_are_parsed() -> None:
+    context = ParserContext()
+    lines = [
+        "| eval/              |          |",
+        "|    mean_reward     | 8.15     |",
+        "| train/             |          |",
+        "|    loss            | -0.04    |",
+    ]
+    events = []
+    for line in lines:
+        events.extend(parse_line(line, "table.log", context))
+    assert any(isinstance(event, SectionEvent) and event.section == "eval" for event in events)
+    assert any(
+        getattr(event, "key", "") == "loss" and getattr(event, "value", 0) == -0.04
+        for event in events
+    )

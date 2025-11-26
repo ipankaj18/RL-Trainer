@@ -12,7 +12,10 @@ import yaml
 class DashboardConfig:
     """Runtime knobs for the dashboard."""
 
-    log_patterns: Sequence[str] = field(default_factory=lambda: ("logs/*.log",))
+    log_patterns: Sequence[str] = field(default_factory=lambda: ("logs/**/*.log",))
+    auto_discover: bool = True
+    log_dirs: Sequence[str] = field(default_factory=lambda: ("logs",))
+    extensions: Sequence[str] = field(default_factory=lambda: (".log", ".txt", ".out"))
     refresh_interval: float = 2.0
     history_size: int = 200
 
@@ -34,11 +37,17 @@ def load_dashboard_config(path: Path | None, overrides: dict | None = None) -> D
         config_data = yaml.safe_load(path.read_text()) or {}
     if overrides:
         config_data.update(overrides)
-    patterns = config_data.get("log_patterns") or ("logs/*.log",)
+    patterns = config_data.get("log_patterns") or ("logs/**/*.log",)
+    auto_discover = bool(config_data.get("auto_discover", True))
+    log_dirs = tuple(config_data.get("log_dirs") or ("logs",))
+    extensions = tuple(config_data.get("extensions") or (".log", ".txt", ".out"))
     refresh_interval = float(config_data.get("refresh_interval", 2.0))
     history_size = int(config_data.get("history_size", 200))
     return DashboardConfig(
         log_patterns=tuple(str(p) for p in patterns),
+        auto_discover=auto_discover,
+        log_dirs=log_dirs,
+        extensions=extensions,
         refresh_interval=refresh_interval,
         history_size=history_size,
     )

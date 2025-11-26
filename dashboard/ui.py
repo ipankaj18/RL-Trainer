@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Tuple
 
 from rich.console import Group, RenderableType
 from rich.layout import Layout
@@ -12,12 +12,23 @@ from rich.text import Text
 
 from .state import DashboardState, MetricSnapshot, PhaseStatus
 
+TREND_METRICS: Tuple[Tuple[str, str, str], ...] = (
+    ("eval", "mean_reward", "Eval mean reward"),
+    ("rollout", "ep_rew_mean", "Rollout reward"),
+    ("train", "loss", "Train loss"),
+)
+
 
 class DashboardUI:
     """Transforms dashboard state into Rich layouts."""
 
-    def __init__(self, max_sections: int = 3) -> None:
+    def __init__(
+        self,
+        max_sections: int = 3,
+        trend_metrics: Sequence[Tuple[str, str, str]] | None = None,
+    ) -> None:
         self.max_sections = max_sections
+        self.trend_metrics = tuple(trend_metrics) if trend_metrics else TREND_METRICS
 
     def render(self, state: DashboardState) -> RenderableType:
         """Build the full dashboard layout."""
@@ -28,8 +39,12 @@ class DashboardUI:
             Layout(name="body"),
         )
         layout["body"].split_row(
-            Layout(self._render_phases(state), size=40),
-            Layout(self._render_sections(state)),
+            Layout(self._render_phases(state), size=44),
+            Layout(name="right"),
+        )
+        layout["right"].split_column(
+            Layout(self._render_sections(state), ratio=3),
+            Layout(self._render_trends(state), size=9),
         )
         return layout
 
@@ -64,7 +79,7 @@ class DashboardUI:
         if not snapshots:
             return Panel("Awaiting metrics…", title="Metrics", border_style="magenta")
         panels = [self._render_snapshot(state, snapshot) for snapshot in snapshots]
-        return Group(*panels)
+        return Panel(Group(*panels), title="Latest Metrics", border_style="magenta")
 
     def _render_snapshot(self, state: DashboardState, snapshot: MetricSnapshot) -> RenderableType:
         table = Table.grid(expand=True)
@@ -81,6 +96,28 @@ class DashboardUI:
             spark = _sparkline([value for _, value in series])
         caption = f"last update: {snapshot.updated_at.strftime('%H:%M:%S')} {spark}".strip()
         return Panel(table, title=snapshot.section, subtitle=caption, border_style="magenta")
+
+    def _render_trends(self, state: DashboardState) -> RenderableType:
+        table = Table.grid(expand=True)
+        table.add_column("Metric", style="bold", ratio=1)
+        table.add_column("Trend", ratio=3)
+        rows = []
+        for section, key, label in self.trend_metrics:
+            history = state.history_for(section, key)
+            if not history:
+                continue
+            values = [value for _, value in history]
+            if not values:
+                continue
+            spark = _sparkline(values, width=30)
+            latest = values[-1]
+            rows.append((label, f"{spark}  {latest:.3f}"))
+        if not rows:
+            table.add_row("waiting for data", "-")
+        else:
+            for label, trend in rows:
+                table.add_row(label, trend)
+        return Panel(table, title="Key Trends", border_style="green")
 
 
 def _sparkline(values: Sequence[float], width: int = 20) -> str:

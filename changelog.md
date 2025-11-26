@@ -5,12 +5,23 @@ All notable changes to this project are documented in this file. Entries are gro
 ## [1.4.3] - 2025-11-24
 ### Added
 - Test pipeline guardrails now verify that Phase 1 and Phase 2 generate evaluation artifacts before proceeding, failing fast in test runs so missing `evaluations.npz` surfaces before production (`main.py`).
+- Dashboard auto-discovery now scans every `.log/.txt/.out` produced under `logs/` (or any configured directory) so the monitoring CLI follows new files without manual glob updates; also exposed `--log-dir`, `--extension`, and `--disable-auto-discovery` switches for custom setups (`dashboard/config.py`, `dashboard/log_reader.py`, `dashboard/cli.py`).
+- Added coverage to ensure recursive discovery respects the requested extensions when watching temporary log directories (`tests/test_dashboard_discovery.py`).
+- Dashboard parser now understands the Stable-Baselines table format (`| checkpoint/ | ... |`), so training/eval metrics surface live in the UI without awaiting phase completion (`dashboard/parsers.py`, `tests/test_dashboard_parsers.py`).
+- New "Key Trends" panel renders ASCII sparklines for eval reward, rollout reward, and training loss so the CLI dashboard exposes a quick visual on learning progress alongside section tables (`dashboard/ui.py`, `docs/dashboard.md`).
+- Reworked the dashboard layout so metric panels and the trend table render inside bordered containers without leaving unused whitespace (`dashboard/ui.py`).
+- Added an optional Textual-based dashboard (`python dashboard/textual_app.py`) that brings multi-panel layouts, columns, and sparkline tiles while reusing the same log discovery engine (`dashboard/textual_app.py`, `dashboard/__init__.py`, `docs/dashboard.md`).
+- Textual dashboard entry point now includes the same import fallback as the CLI, so running `python dashboard/textual_app.py` works without treating the package as installed (`dashboard/textual_app.py`).
 
 ### Changed
 - Evaluation cadence logging now reports real timestep cadence across vectorized environments, making early-stopping messaging accurate for the effective env count (`src/train_phase1.py`, `src/train_phase2.py`).
+- Dashboard docs now highlight the zero-config auto-discovery behavior and show how to extend it via YAML overrides (`docs/dashboard.md`).
+- Added project root to Pyright's search paths so editor diagnostics resolve modules in the new `dashboard/` package (`pyrightconfig.json`).
+- Declared the `textual` dependency so the richer terminal UI can be launched without manual installs (`requirements.txt`).
 
 ### Fixed
 - Corrected evaluation frequency scaling for vectorized runs by converting desired timestep cadence into per-callback call units, ensuring Phase 1/2 evaluations always trigger and PhaseGuard can find `evaluations.npz` in production (`src/training_mode_utils.py`).
+- Resolved Phase 2 evaluation normalization crash by aligning wrapper order so the eval env remains `VecNormalize` at the top level, allowing sync with the training env during EvalCallback (`src/train_phase2.py`).
 
 ## [1.4.2] - 2025-11-24
 ### Added

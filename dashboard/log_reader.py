@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List
+from typing import Dict, Iterable, Iterator, List, Sequence
 
 
 @dataclass
@@ -28,12 +28,27 @@ class LogTailer:
         return lines
 
 
-def discover_logs(patterns: Iterable[str]) -> List[Path]:
-    """Expand every glob pattern to an ordered list of files."""
+def discover_logs(
+    patterns: Iterable[str],
+    auto_dirs: Sequence[str] | None = None,
+    extensions: Sequence[str] | None = None,
+) -> List[Path]:
+    """Expand every glob pattern plus auto-discovered directories."""
 
     discovered: List[Path] = []
     for pattern in patterns:
         discovered.extend(Path().glob(pattern))
-    # Preserve deterministic ordering for repeatable dashboards/tests
+
+    if auto_dirs:
+        for directory in auto_dirs:
+            base = Path(directory)
+            if not base.exists():
+                continue
+            if extensions:
+                for ext in extensions:
+                    discovered.extend(base.rglob(f"*{ext}"))
+            else:
+                discovered.extend(base.rglob("*"))
+
     unique = sorted({path.resolve() for path in discovered if path.exists()})
     return unique

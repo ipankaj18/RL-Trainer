@@ -71,6 +71,11 @@ def parse_line(line: str, source: str, context: ParserContext) -> List[ParsedEve
             PhaseEvent(source=source, phase=f"Phase {phase_id}", status=phase_label)
         )
 
+    table_events = _parse_table_row(stripped, source, context)
+    if table_events:
+        events.extend(table_events)
+        return events
+
     metric_event = _parse_metric(stripped, source, context)
     if metric_event:
         events.append(metric_event)
@@ -108,6 +113,46 @@ def _parse_metric(line: str, source: str, context: ParserContext) -> MetricEvent
         key=key,
         value=_coerce_value(value_text),
     )
+
+
+def _parse_table_row(
+    line: str, source: str, context: ParserContext
+) -> List[ParsedEvent] | None:
+    """Parse Stable-Baselines style ASCII tables."""
+
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    cells = [cell for cell in cells if cell]
+    if not cells:
+        return None
+
+    events: List[ParsedEvent] = []
+    head = cells[0]
+    if head.endswith("/"):
+        section = head.rstrip("/").strip().lower().replace(" ", "_")
+        context.section = section
+        events.append(SectionEvent(source=source, section=section))
+        return events
+
+    if len(cells) < 2 or context.section is None:
+        return None
+
+    key = _sanitize_key(head)
+    value_text = cells[1]
+    if not _looks_numeric(value_text):
+        return None
+    events.append(
+        MetricEvent(
+            source=source,
+            section=context.section,
+            key=key,
+            value=_coerce_value(value_text),
+        )
+    )
+    return events
 
 
 def _sanitize_key(key: str) -> str:

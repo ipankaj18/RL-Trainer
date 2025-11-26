@@ -32,6 +32,7 @@ sb3-contrib==2.3.0  # For MaskablePPO (Phase 1 & Phase 2 action masking)
 colorama>=0.4.6
 tqdm>=4.65.0
 rich>=13.0.0
+textual>=0.58.0
 
 # Data Processing
 # IMPORTANT: For Python 3.13 compatibility, use versions with prebuilt wheels

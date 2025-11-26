@@ -1196,8 +1196,10 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False):
         return ActionMasker(monitored_env, mask_fn)
 
     eval_env = DummyVecEnv([_make_eval_env])
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    # Order matters: apply action-mask wrapper before VecNormalize so the top-level
+    # env remains VecNormalize for normalization syncing with the training env.
     eval_env = ActionMaskVecEnvWrapper(eval_env)
+    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
     ensure_action_space(eval_env, PHASE2_CONFIG['action_space'], label="EVAL")
     log_action_mask_shape(eval_env, PHASE2_CONFIG['action_space'], label="EVAL")
     try:

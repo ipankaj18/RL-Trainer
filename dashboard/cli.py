@@ -34,11 +34,17 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     args = _parse_args(argv)
     config_path = Path(args.config) if args.config else None
-    overrides = {
-        "log_patterns": args.log_glob or None,
-        "refresh_interval": args.refresh if args.refresh else None,
-    }
-    overrides = {k: v for k, v in overrides.items() if v is not None}
+    overrides = {}
+    if args.log_glob:
+        overrides["log_patterns"] = args.log_glob
+    if args.refresh:
+        overrides["refresh_interval"] = args.refresh
+    if args.log_dir:
+        overrides["log_dirs"] = args.log_dir
+    if args.extension:
+        overrides["extensions"] = args.extension
+    if args.disable_auto_discovery:
+        overrides["auto_discover"] = False
     config = load_dashboard_config(config_path, overrides)
     state = DashboardState(history_size=config.history_size)
     ui = DashboardUI()
@@ -51,7 +57,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     with Live(ui.render(state), refresh_per_second=max(1, int(refresh_hz))) as live:
         try:
             while True:
-                _ensure_tailers(config.log_patterns, tailers, contexts)
+                _ensure_tailers(config, tailers, contexts)
                 _consume_logs(tailers, contexts, state)
                 live.update(ui.render(state))
                 time.sleep(config.refresh_interval)
@@ -68,15 +74,32 @@ def _parse_args(argv: Iterable[str] | None) -> argparse.Namespace:
         help="Glob pattern for log files (can be provided multiple times)",
     )
     parser.add_argument("--refresh", type=float, help="UI refresh interval in seconds")
+    parser.add_argument(
+        "--log-dir",
+        action="append",
+        help="Directory to recursively monitor for new log files (default: logs)",
+    )
+    parser.add_argument(
+        "--extension",
+        action="append",
+        help="File extension to include during auto-discovery (default: .log, .txt, .out)",
+    )
+    parser.add_argument(
+        "--disable-auto-discovery",
+        action="store_true",
+        help="Disable automatic scanning of log directories",
+    )
     return parser.parse_args(argv)
 
 
 def _ensure_tailers(
-    patterns: Iterable[str],
+    config,
     tailers: Dict[Path, LogTailer],
     contexts: Dict[Path, ParserContext],
 ) -> None:
-    for path in discover_logs(patterns):
+    auto_dirs = config.log_dirs if config.auto_discover else None
+    extensions = config.extensions if config.auto_discover else None
+    for path in discover_logs(config.log_patterns, auto_dirs=auto_dirs, extensions=extensions):
         if path not in tailers:
             tailers[path] = LogTailer(path=path)
             contexts[path] = ParserContext()

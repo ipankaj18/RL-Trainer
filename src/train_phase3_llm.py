@@ -25,14 +25,30 @@ from pathlib import Path
 from typing import Optional
 
 
+# Maximum BLAS threads per process when using SubprocVecEnv
+# With 64 envs, each spawning threads, we must cap this to avoid resource exhaustion
+# E.g., 64 envs × 127 threads = 8,128 threads → system crash
+_MAX_BLAS_THREADS_PER_PROCESS = 4
+
+
 def _detect_thread_cap() -> int:
-    """Auto-detect a reasonable BLAS thread cap based on CPU size."""
+    """Auto-detect a reasonable BLAS thread cap based on CPU size.
+    
+    CRITICAL: Capped to _MAX_BLAS_THREADS_PER_PROCESS to prevent resource exhaustion
+    when combined with SubprocVecEnv (64 parallel processes × N threads each).
+    
+    Previous bug: On 128-core systems, this returned 127, causing:
+        64 SubprocVecEnv × 127 BLAS threads = 8,128 threads → pthread_create failed
+    """
     try:
         # Prefer affinity-aware measurement when available.
         cpu_count = len(os.sched_getaffinity(0))
     except AttributeError:
         cpu_count = os.cpu_count() or 2
-    return max(1, cpu_count - 1)
+    
+    # Cap to prevent resource exhaustion with SubprocVecEnv
+    # Even on large systems, 4 threads per subprocess is sufficient
+    return min(_MAX_BLAS_THREADS_PER_PROCESS, max(1, cpu_count - 1))
 
 
 def _ensure_phase3_directories(config, market_name: str) -> None:
@@ -59,9 +75,10 @@ def _ensure_phase3_directories(config, market_name: str) -> None:
 
 # Limit math/BLAS thread pools before heavy numerical imports. Allow override via env var.
 try:
-    _THREAD_LIMIT_INT = max(
-        1,
-        int(os.environ.get("TRAINER_MAX_BLAS_THREADS", str(_detect_thread_cap()))),
+    # Clamp explicit overrides as well to avoid runaway thread creation.
+    _THREAD_LIMIT_INT = min(
+        _MAX_BLAS_THREADS_PER_PROCESS,
+        max(1, int(os.environ.get("TRAINER_MAX_BLAS_THREADS", str(_detect_thread_cap())))),
     )
 except ValueError:
     _THREAD_LIMIT_INT = _detect_thread_cap()
@@ -1185,12 +1202,14 @@ def train_phase3(
     )
 
     # Load fusion/LLM toggles (critical for PURE RL mode)
+    llm_config_data = {}
     try:
         with open(config['llm_config_path'], 'r') as f:
             llm_config_data = yaml.safe_load(f) or {}
         fusion_cfg = llm_config_data.get('fusion', {})
     except Exception as exc:
         safe_print(f"[LLM] [WARN] Could not load fusion config: {exc}")
+        llm_config_data = {}
         fusion_cfg = {}
 
     # Ensure fusion settings reflect pure RL defaults when LLM is disabled
@@ -1200,6 +1219,7 @@ def train_phase3(
         'always_on_thinking': False,
     }
     fusion_cfg = {**fusion_defaults, **fusion_cfg}
+    llm_config_data.setdefault('fusion', fusion_cfg)
     config['fusion'] = fusion_cfg
 
     safe_print(
@@ -1253,9 +1273,8 @@ def train_phase3(
     safe_print("[HYBRID] Creating hybrid agent...")
 
     # Load LLM config (separate from training config)
-    import yaml
-    with open(config['llm_config_path'], 'r') as f:
-        llm_config = yaml.safe_load(f)
+    llm_config = llm_config_data or {}
+    llm_config.setdefault('fusion', fusion_cfg)
 
     # Create hybrid agent with rl_model=None (will be set after model creation)
     hybrid_agent = HybridTradingAgent(
@@ -1264,7 +1283,10 @@ def train_phase3(
         config=llm_config  # ← Pass LLM config, not training config!
     )
     safe_print("[OK] Hybrid agent created (RL model will be set after environment creation)")
-    safe_print(f"[HYBRID] LLM queries disabled: always_on_thinking={llm_config['fusion']['always_on_thinking']}")
+    safe_print(
+        "[HYBRID] LLM queries disabled: "
+        f"always_on_thinking={llm_config.get('fusion', {}).get('always_on_thinking', False)}"
+    )
 
     # Create environments with hybrid agent reference
     safe_print(f"[ENV] Creating {config['n_envs']} parallel environments...")

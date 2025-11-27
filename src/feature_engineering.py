@@ -107,7 +107,17 @@ def add_llm_features(df: pd.DataFrame) -> pd.DataFrame:
     if 'close' in df.columns:
         df['sma_50'] = df['close'].rolling(50).mean()
         df['sma_200'] = df['close'].rolling(200).mean()
-        print("    [OK] Multi-timeframe SMAs added")
+        
+        # Vectorized Slope Calculation
+        # Slope = (Current - Lagged) / Period / Current
+        df['sma_50_slope'] = (df['sma_50'] - df['sma_50'].shift(10)) / 10 / (df['sma_50'] + 1e-8)
+        df['sma_200_slope'] = (df['sma_200'] - df['sma_200'].shift(20)) / 20 / (df['sma_200'] + 1e-8)
+        
+        # ADX Slope (if ADX exists)
+        if 'adx' in df.columns:
+            df['adx_slope'] = (df['adx'] - df['adx'].shift(5)) / 5 / (df['adx'] + 1e-8)
+        
+        print("    [OK] Multi-timeframe SMAs and slopes added")
     
     # Multi-timeframe RSI (using different periods)
     if 'close' in df.columns:
@@ -119,20 +129,129 @@ def add_llm_features(df: pd.DataFrame) -> pd.DataFrame:
     
     # Volume analysis across timeframes
     if 'volume' in df.columns:
-        df['volume_ratio_5min'] = df['volume'] / df['volume'].rolling(5).mean()
-        df['volume_ratio_20min'] = df['volume'] / df['volume'].rolling(20).mean()
+        df['volume_ratio_5min'] = df['volume'] / (df['volume'].rolling(5).mean() + 1e-8)
+        df['volume_ratio_20min'] = df['volume'] / (df['volume'].rolling(20).mean() + 1e-8)
+        
+        # Volume regime (current / 20-period avg)
+        df['volume_regime'] = df['volume_ratio_20min']
         print("    [OK] Volume ratio features added")
     
     # Support and Resistance levels
     if 'high' in df.columns and 'low' in df.columns:
         df['support_20'] = df['low'].rolling(20).min()
         df['resistance_20'] = df['high'].rolling(20).max()
+        
+        # Price vs Support/Resistance
+        if 'close' in df.columns:
+            df['price_vs_support'] = (df['close'] - df['support_20']) / (df['close'] + 1e-8)
+        
         print("    [OK] Support/Resistance levels added")
     
     # Price change metrics
     if 'close' in df.columns:
         df['price_change_60min'] = df['close'].pct_change(60)
+        
+        # Momentum features
+        df['price_momentum_20'] = df['close'].pct_change(20)
+        df['price_momentum_60'] = df['close'].pct_change(60)
+        
+        # Session trend (approximate 30-bar lookback)
+        df['session_trend'] = df['close'].pct_change(30)
+        
         print("    [OK] Price change metrics added")
+        
+    # Vectorized Pattern Recognition
+    if all(col in df.columns for col in ['high', 'low', 'close']):
+        df = add_pattern_features(df)
+        print("    [OK] Pattern recognition features added")
+    
+    return df
+
+
+def add_pattern_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add vectorized pattern recognition features.
+    
+    Args:
+        df: DataFrame with OHLC data
+        
+    Returns:
+        DataFrame with pattern features added
+    """
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    # Lookback windows
+    lookback = 5
+    
+    # Previous highs/lows (shifted to not include current bar)
+    prev_high_max = high.shift(1).rolling(lookback).max()
+    prev_low_min = low.shift(1).rolling(lookback).min()
+    
+    # Higher High: Current high > previous lookback high
+    df['higher_high'] = np.where(high > prev_high_max * 1.001, 1.0, 
+                                np.where(high < prev_high_max * 0.999, -1.0, 0.0))
+    
+    # Lower Low: Current low < previous lookback low
+    df['lower_low'] = np.where(low < prev_low_min * 0.999, 1.0,
+                              np.where(low > prev_low_min * 1.001, -1.0, 0.0))
+    
+    # Higher Low: Current low > previous low AND previous low > low before that
+    # This is complex to vectorize perfectly matching the iterative logic, 
+    # but we can approximate or use rolling windows.
+    # Iterative logic: current_low > prev_low_1 * 1.001 and prev_low_1 > prev_low_2 * 1.001
+    # Let's simplify to: Low > Low(t-1) > Low(t-2)
+    # Or strictly following the logic:
+    prev_low_1 = low.shift(1).rolling(lookback).min()
+    prev_low_2 = low.shift(lookback+1).rolling(lookback).min()
+    
+    df['higher_low'] = np.where((low > prev_low_1 * 1.001) & (prev_low_1 > prev_low_2 * 1.001), 1.0, 0.0)
+    
+    # Lower High
+    prev_high_1 = high.shift(1).rolling(lookback).max()
+    prev_high_2 = high.shift(lookback+1).rolling(lookback).max()
+    
+    df['lower_high'] = np.where((high < prev_high_1 * 0.999) & (prev_high_1 < prev_high_2 * 0.999), 1.0, 0.0)
+    
+    # Double Top
+    # Recent max < Prev max * 0.99 (lower peak) is NOT a double top usually.
+    # Standard double top: Two peaks at similar level.
+    # The iterative logic was: recent_max < prev_max * 0.99 ... wait, that checks for a LOWER peak.
+    # Let's stick to the iterative logic's intent but vectorize.
+    # Iterative: recent_max < prev_max * 0.99 AND low std dev.
+    
+    lookback_20 = 20
+    recent_highs = high.rolling(lookback_20)
+    prev_highs = high.shift(lookback_20).rolling(lookback_20)
+    
+    recent_max = recent_highs.max()
+    prev_max = prev_highs.max()
+    recent_std = recent_highs.std()
+    
+    # Logic: Peak is slightly lower or equal, and low volatility
+    is_double_top = (recent_max < prev_max * 0.99) & ((recent_std / (recent_max + 1e-8)) < 0.02)
+    df['double_top'] = np.where(is_double_top, 0.7, 0.0)
+    
+    # Double Bottom
+    recent_lows = low.rolling(lookback_20)
+    prev_lows = low.shift(lookback_20).rolling(lookback_20)
+    
+    recent_min = recent_lows.min()
+    prev_min = prev_lows.min()
+    recent_low_std = recent_lows.std()
+    
+    is_double_bottom = (recent_min > prev_min * 1.01) & ((recent_low_std / (recent_min + 1e-8)) < 0.02)
+    df['double_bottom'] = np.where(is_double_bottom, 0.7, 0.0)
+    
+    # Breakout (Close > Resistance)
+    # Resistance is max of previous 20 bars
+    resistance = high.shift(1).rolling(20).max()
+    df['breakout_signal'] = np.where(close > resistance * 1.002, 1.0, 0.0)
+    
+    # Breakdown (Close < Support)
+    support = low.shift(1).rolling(20).min()
+    df['breakdown_signal'] = np.where(close < support * 0.998, 1.0, 0.0)
     
     return df
 

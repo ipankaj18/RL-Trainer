@@ -22,6 +22,7 @@ plotly>=4.5.0
 
 # Deep Learning Framework
 tensorflow>=2.15.1
+tensorboard>=2.15.1
 
 # Reinforcement Learning
 # PINNED VERSIONS for Phase 1/2 compatibility (transfer learning fix)

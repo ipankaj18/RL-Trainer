@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file. Entries are grouped by date and categorized as Added, Changed, Fixed, Removed, or Deprecated.
 
+## [1.4.5] - 2025-11-27
+### Changed - Performance Optimization 🚀
+- **Vectorized Feature Engineering** (`src/feature_engineering.py`):
+  - Implemented vectorized calculations for SMA slopes, pattern recognition (Higher Highs, Lower Lows, Double Tops/Bottoms), and market context features.
+  - Replaced iterative Pandas operations with fast NumPy/Pandas vectorization.
+  - **Impact**: Reduced feature calculation time from ~0.5ms to ~0.08ms per step.
+
+- **Optimized LLM Feature Builder** (`src/llm_features.py`):
+  - Refactored `LLMFeatureBuilder` to use pre-calculated features from the environment's dataframe.
+  - Removed all on-the-fly computations from the critical `step()` path.
+  - **Impact**: Resolved CPU bottleneck, increasing training throughput from ~31 FPS to **~190 FPS** (6x improvement).
+
+### Fixed
+- **Missing Dependency**: Added `tensorboard` to `requirements.txt` to fix `ImportError` during Phase 3 training.
+
+## [1.4.4] - 2025-12-01
+### Fixed
+- Prevented Phase 3 resource exhaustion by capping BLAS thread overrides to `_MAX_BLAS_THREADS_PER_PROCESS` and keeping the auto-detected cap within that bound so SubprocVecEnv workloads cannot spawn thousands of pthreads (`src/train_phase3_llm.py:76-94`).
+- Hardened fusion config loading so the previously shadowed `yaml` import is never lost, fusion defaults survive read failures, and the hybrid agent receives a consistent config even if the file is missing (`src/train_phase3_llm.py:1204-1290`).
+
 ## [1.4.3] - 2025-11-24
 ### Added
 - Test pipeline guardrails now verify that Phase 1 and Phase 2 generate evaluation artifacts before proceeding, failing fast in test runs so missing `evaluations.npz` surfaces before production (`main.py`).

@@ -3,6 +3,34 @@
 All notable changes to this project are documented in this file. Entries are grouped by date and categorized as Added, Changed, Fixed, Removed, or Deprecated.
 
 ## [Unreleased]
+### Fixed - JAX Phase 2 Broadcasting Error (2025-12-02)
+- **Problem**: JAX Phase 2 training failed with `ValueError: Incompatible shapes for broadcasting: shapes=[(4096, 231), (228,)]`
+  - **Symptoms**: Training crashed during observation normalization in `collect_rollouts_phase2()`
+  - **Root Cause**: `compute_observation_shape()` in `validation_utils.py` calculated 228 dimensions but actual Phase 2 observations have 231 dimensions
+  - **Impact**: Users could not run JAX Phase 2 training with any configuration
+
+- **Solution** (`src/jax_migration/validation_utils.py:142`):
+  - Changed `phase2_dims = 3` → `phase2_dims = 6` to account for all Phase 2 features
+  - Updated comment to list all 6 Phase 2 features:
+    - 3 PM state features: `trailing_stop_active`, `unrealized_pnl`, `be_move_count`
+    - 3 validity features: `can_enter`, `can_manage`, `has_position`
+  - The 3 validity features were added in previous Phase 2 parity update (changelog line 664-674) but not reflected in validation code
+  
+- **Technical Details**:
+  - Normalizer was initialized with shape (228,) but observations had shape (231,)
+  - Broadcasting error occurred: `(obs - normalizer.mean)` tried to broadcast (4096, 231) - (228,)
+  - Phase 2 observation construction (`env_phase2_jax.py:176-177`):
+    - Market window: 220 dims (20 * 11 features)
+    - Position features: 5 dims
+    - PM state features: 3 dims
+    - Validity features: 3 dims
+    - **Total: 231 dims**
+
+- **Verification**:
+  - ✅ Test run completed: `Update 1/1 | SPS: 561 | Return: -3.81 | Loss: -0.0003`
+  - ✅ No broadcasting errors during normalization
+  - ✅ Validation shows correct shape: "Expected observation shape: (231,)"
+
 ### Fixed - JAX Phase 2 EnvParamsPhase2 Hashability Error (2025-12-02)
 - **Problem**: JAX Phase 2 training failed with `ValueError: Non-hashable static arguments are not supported` and `TypeError: unhashable type: 'EnvParamsPhase2'`
   - **Symptoms**: Training crashes immediately after validation when calling `batch_reset_phase2(reset_key, env_params, config.num_envs, data)`

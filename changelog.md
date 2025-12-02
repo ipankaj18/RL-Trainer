@@ -3,6 +3,32 @@
 All notable changes to this project are documented in this file. Entries are grouped by date and categorized as Added, Changed, Fixed, Removed, or Deprecated.
 
 ## [Unreleased]
+### Added - JAX Training Metrics & Production Readiness (2025-12-02)
+- **Feature**: Real-time `TrainingMetricsTracker` for JAX
+  - Tracks P&L, Win Rate, Drawdown, and Apex Compliance during training
+  - Logs to console and JSON (`models/phase1_jax/training_metrics_MARKET.json`)
+  - Integrated into `train_phase2_jax.py` and `train_ppo_jax_fixed.py`
+- **Feature**: Robust Checkpoint Saving for Phase 1
+  - Added `--checkpoint_dir` argument to `train_ppo_jax_fixed.py`
+  - Saves Flax checkpoints, normalizer stats, metrics, and metadata
+  - Auto-creates directory structure
+- **Feature**: Production-Ready Timestep Menus
+  - Updated `main.py` Phase 1 options: 500K (Test) to 20M (Extended)
+  - Updated `main.py` Phase 2 options: 500K (Test) to 100M (Max)
+  - Aligned with PPO curriculum best practices (Phase 2 = 2-5x Phase 1)
+
+### Changed
+- **Environment**: Updated `env_phase2_jax.py` to expose `final_balance`, `trailing_dd`, `forced_close` in info dict
+- **Training**: `train_phase2_jax.py` now accepts `--market` argument and auto-detects data paths
+- **Validation**: Improved `validate_checkpoint_compatibility` to handle directory/prefix paths better
+- **Documentation**: Updated `training_analysis_report.md` with correct eval commands and Apex rules
+
+### Fixed
+- **Critical**: Fixed `train_ppo_jax_fixed.py` not saving checkpoints (was only printing metrics)
+- **Critical**: Fixed `SyntaxError` in `main.py` (unmatched parenthesis in menu update)
+- **Bug**: Fixed `FileNotFoundError` in Phase 2 by implementing smart data path detection
+- **Bug**: Fixed "Invalid checkpoint structure" error by improving validation logic
+
 ### Fixed - JAX Phase 2 Broadcasting Error (2025-12-02)
 - **Problem**: JAX Phase 2 training failed with `ValueError: Incompatible shapes for broadcasting: shapes=[(4096, 231), (228,)]`
   - **Symptoms**: Training crashed during observation normalization in `collect_rollouts_phase2()`

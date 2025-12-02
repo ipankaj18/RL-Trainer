@@ -26,13 +26,47 @@ def validate_checkpoint_compatibility(
     import flax.core
     
     try:
-        # Load checkpoint
-        ckpt = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+        # Try multiple methods to load checkpoint
+        ckpt = None
+        
+        # Method 1: Try as a directory
+        import os
+        if os.path.isdir(checkpoint_path):
+            ckpt = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+        
+        # Method 2: Try with prefix (e.g., "models/phase1_jax/phase1_jax_final")
+        if ckpt is None and not os.path.isdir(checkpoint_path):
+            # Extract directory and prefix
+            parts = Path(checkpoint_path)
+            if parts.parent.exists():
+                prefix = parts.name
+                ckpt = checkpoints.restore_checkpoint(
+                    ckpt_dir=str(parts.parent),
+                    target=None,
+                    prefix=prefix
+                )
+        
+        # Method 3: Try as exact file path
+        if ckpt is None and os.path.isfile(checkpoint_path):
+            import pickle
+            with open(checkpoint_path, 'rb') as f:
+                ckpt = pickle.load(f)
         
         if not ckpt or 'params' not in ckpt:
+            # Provide helpful error message
+            available_files = []
+            if os.path.exists(str(Path(checkpoint_path).parent)):
+                import glob
+                pattern = str(Path(checkpoint_path).parent / "checkpoint_*")
+                available_files = glob.glob(pattern)
+            
+            error_msg = f'Invalid checkpoint structure at {checkpoint_path}'
+            if available_files:
+                error_msg += f'. Found checkpoints: {", ".join([Path(f).name for f in available_files[:3]])}'
+            
             return {
                 'compatible': False,
-                'error': 'Invalid checkpoint structure',
+                'error': error_msg,
                 'warnings': []
             }
         

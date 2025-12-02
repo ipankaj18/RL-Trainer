@@ -661,6 +661,11 @@ def step_phase2(
         'be_moved': new_be_count > 0,
         'trade_pnl': trade_pnl,
         'position_closed': position_closed,
+        # NEW: Additional fields for training metrics tracker
+        'final_balance': new_balance,
+        'trailing_dd': new_highest - new_balance,
+        'forced_close': forced_close,
+        'episode_return': new_balance - params.initial_balance,
     }
     
     return obs, new_state, reward, done, info

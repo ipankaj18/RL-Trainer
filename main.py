@@ -18,58 +18,19 @@ Date: October 2025
 
 import os
 import sys
-import subprocess
 import logging
 import time
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
-# Import model utilities
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
-from model_utils import detect_models_in_folder, display_model_selection
-
-# Try to import colorama for colored output
-try:
-    from colorama import init, Fore, Style
-    init(autoreset=True)
-    COLORAMA_AVAILABLE = True
-except ImportError:
-    print("Warning: colorama not installed. Install with: pip install colorama")
-    COLORAMA_AVAILABLE = False
-
-# Try to import tqdm for progress bars
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    print("Warning: tqdm not installed. Install with: pip install tqdm")
-    TQDM_AVAILABLE = False
-
-
-class Colors:
-    """Color constants for terminal output."""
-    
-    if COLORAMA_AVAILABLE:
-        RED = Fore.RED
-        GREEN = Fore.GREEN
-        BLUE = Fore.BLUE
-        YELLOW = Fore.YELLOW
-        MAGENTA = Fore.MAGENTA
-        CYAN = Fore.CYAN
-        WHITE = Fore.WHITE
-        BOLD = Style.BRIGHT
-        RESET = Style.RESET_ALL
-    else:
-        RED = "\033[31m"
-        GREEN = "\033[32m"
-        BLUE = "\033[34m"
-        YELLOW = "\033[33m"
-        MAGENTA = "\033[35m"
-        CYAN = "\033[36m"
-        WHITE = "\033[37m"
-        BOLD = "\033[1m"
-        RESET = "\033[0m"
+# Import CLI utilities (refactored from inline definitions)
+from src.cli_utils import (
+    Colors, clear_screen, print_header, get_user_input, prompt_confirm,
+    prompt_choice, run_command_with_progress, detect_and_select_market,
+    select_hardware_profile
+)
 
 
 class RLTrainerMenu:
@@ -90,16 +51,27 @@ class RLTrainerMenu:
         self.main_menu_options = {
             "1": "Requirements Installation",
             "2": "Data Processing",
-            "3": "Training Model",
-            "4": "Evaluator",
-            "5": "Exit"
+            "3": "Hardware Stress Test & Auto-tune",
+            "4": "Hybrid LLM/GPU Test Run",
+            "5": "Training Model (PyTorch)",
+            "6": "JAX Training (Experimental)",
+            "7": "Evaluator",
+            "8": "Exit"
         }
-        
+
         self.training_menu_options = {
             "1": "Complete Training Pipeline (Test Mode)",
             "2": "Complete Training Pipeline (Production Mode)",
             "3": "Continue Training from Existing Model",
             "4": "Back to Main Menu"
+        }
+
+        self.jax_training_menu_options = {
+            "1": "Quick Validation Test (JAX Installation Check)",
+            "2": "JAX Phase 1 Training (Entry Learning)",
+            "3": "JAX Phase 2 Training (Position Management)",
+            "4": "Custom JAX Training (Advanced)",
+            "5": "Back to Main Menu"
         }
     
     def setup_logging(self):
@@ -121,11 +93,7 @@ class RLTrainerMenu:
         
         self.logger = logging.getLogger(__name__)
         self.logger.info("RL Trainer Menu System Initialized")
-    
-    def clear_screen(self):
-        """Clear the terminal screen."""
-        os.system('cls' if os.name == 'nt' else 'clear')
-    
+
     def display_banner(self):
         """Display the RL TRAINER banner with Unicode block characters similar to CLAUDE CODE style."""
         # RL TRAINER ASCII art using full Unicode block characters - large blocky style
@@ -200,82 +168,6 @@ class RLTrainerMenu:
 
         print("\n".join(banner_sections))
 
-    def detect_and_select_market(self) -> Optional[str]:
-        """
-        Detect available market data files and prompt user to select one.
-
-        Returns:
-            Selected market symbol (e.g., 'ES', 'NQ') or None if cancelled
-        """
-        try:
-            # Import market detection utilities from model_utils
-            # Note: src directory should already be in sys.path from line 29
-            from model_utils import detect_available_markets
-            from market_specs import get_market_spec
-
-            # Detect available markets
-            data_dir = self.project_dir / 'data'
-            available_markets = detect_available_markets(str(data_dir))
-
-            if not available_markets:
-                print(f"\n{Colors.RED}No market data files found in data/ directory.{Colors.RESET}")
-                print(f"{Colors.YELLOW}Please run 'Data Processing' first to prepare market data.{Colors.RESET}")
-                return None
-
-            # Display header
-            print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
-            print(f"{Colors.BOLD}{Colors.CYAN}║                   MARKET SELECTION                            ║{Colors.RESET}")
-            print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
-            print()
-
-            # If only one market, auto-select it
-            if len(available_markets) == 1:
-                market = available_markets[0]['market']
-                market_spec = get_market_spec(market)
-                spec_info = f"${market_spec.contract_multiplier} x {market_spec.tick_size} tick = ${market_spec.tick_value:.2f}"
-
-                print(f"{Colors.GREEN}Detected 1 market:{Colors.RESET}")
-                print(f"  • {Colors.BOLD}{market}{Colors.RESET} - {available_markets[0]['minute_file']}")
-                print(f"    {Colors.CYAN}{spec_info}{Colors.RESET}")
-                print(f"\n{Colors.GREEN}Auto-selecting {market} for training.{Colors.RESET}")
-                return market
-
-            # Multiple markets - show selection menu
-            print(f"{Colors.GREEN}Detected {len(available_markets)} markets:{Colors.RESET}\n")
-
-            for i, market_info in enumerate(available_markets, 1):
-                market = market_info['market']
-                market_spec = get_market_spec(market)
-                spec_info = f"${market_spec.contract_multiplier} x {market_spec.tick_size} tick = ${market_spec.tick_value:.2f}"
-
-                print(f"{Colors.BOLD}  {i}. {market:<8}{Colors.RESET} - {market_info['minute_file']:<25}")
-                print(f"     {Colors.CYAN}{spec_info} | Commission: ${market_spec.commission}/side{Colors.RESET}")
-                print()
-
-            print(f"{Colors.YELLOW}  0. Cancel{Colors.RESET}")
-            print()
-
-            # Get user selection
-            valid_choices = [str(i) for i in range(len(available_markets) + 1)]
-            choice = self.get_user_input(
-                f"{Colors.BOLD}Select market to train on (0-{len(available_markets)}): {Colors.RESET}",
-                valid_choices
-            )
-
-            if choice == "0" or choice is None:
-                print(f"\n{Colors.YELLOW}Market selection cancelled.{Colors.RESET}")
-                return None
-
-            # Return selected market symbol
-            selected_market = available_markets[int(choice) - 1]['market']
-            print(f"\n{Colors.GREEN}Selected market: {Colors.BOLD}{selected_market}{Colors.RESET}")
-            return selected_market
-
-        except Exception as e:
-            self.logger.error(f"Error detecting markets: {str(e)}", exc_info=True)
-            print(f"\n{Colors.RED}Error detecting markets: {str(e)}{Colors.RESET}")
-            return None
-
     def display_main_menu(self):
         """Display the main menu options."""
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
@@ -284,7 +176,7 @@ class RLTrainerMenu:
         print()
         
         for key, value in self.main_menu_options.items():
-            if key == "5":  # Exit option
+            if key == "7":  # Exit option
                 print(f"{Colors.RED}  {key}. {value}{Colors.RESET}")
             else:
                 print(f"{Colors.GREEN}  {key}. {value}{Colors.RESET}")
@@ -302,35 +194,7 @@ class RLTrainerMenu:
             print(f"{color}  {key}. {value}{Colors.RESET}")
         print()
 
-    
-    def get_user_input(self, prompt: str, valid_options: Optional[List[str]] = None) -> Optional[str]:
-        """
-        Get and validate user input.
-        
-        Args:
-            prompt: The prompt to display to the user
-            valid_options: List of valid input options
-            
-        Returns:
-            Validated user input
-        """
-        while True:
-            try:
-                user_input = input(f"{Colors.BLUE}{prompt}{Colors.RESET}").strip()
-                
-                if valid_options and user_input not in valid_options:
-                    print(f"{Colors.RED}Invalid option. Please choose from: {', '.join(valid_options)}{Colors.RESET}")
-                    continue
 
-                return user_input
-
-            except KeyboardInterrupt:
-                print(f"\n{Colors.YELLOW}Operation cancelled by user.{Colors.RESET}")
-                return None
-            except EOFError:
-                print(f"\n{Colors.YELLOW}Input stream ended.{Colors.RESET}")
-                return None
-    
     def validate_instrument(self, instrument: str) -> bool:
         """
         Validate instrument selection.
@@ -363,7 +227,7 @@ class RLTrainerMenu:
         self.display_instruments()
         
         while True:
-            instrument_input = self.get_user_input(
+            instrument_input = get_user_input(
                 f"{Colors.YELLOW}{prompt_message} (e.g., '1' or 'ES'): {Colors.RESET}"
             )
             
@@ -387,98 +251,7 @@ class RLTrainerMenu:
                 else:
                     print(f"{Colors.RED}Invalid instrument. Please choose from the list.{Colors.RESET}")
     
-    def run_command_with_progress(self, command: List[str], description: str, 
-                              log_file: str = None) -> Tuple[bool, str]:
-        """
-        Run a command with progress indication and logging.
-        
-        Args:
-            command: Command to execute as list of strings
-            description: Description of the operation
-            log_file: Log file to save output
-            
-        Returns:
-            Tuple of (success, output)
-        """
-        print(f"\n{Colors.YELLOW}{description}{Colors.RESET}")
-        print(f"{Colors.CYAN}Executing: {' '.join(command)}{Colors.RESET}")
-        print(f"{Colors.MAGENTA}{'=' * 60}{Colors.RESET}")
 
-        try:
-            # Always run from project root directory
-            working_directory = self.project_dir
-
-            # Set up environment with project root in PYTHONPATH for imports
-            env = os.environ.copy()
-            pythonpath = str(self.project_dir)
-            if 'PYTHONPATH' in env:
-                env['PYTHONPATH'] = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
-            else:
-                env['PYTHONPATH'] = pythonpath
-
-            # Start the process
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,  # Prevent interactive prompts from hanging
-                encoding='utf-8',  # Explicitly use UTF-8 to handle Unicode characters (✅, ⚠️, etc.)
-                errors='replace',  # Replace invalid characters instead of crashing
-                cwd=working_directory,
-                env=env
-            )
-
-            output_lines = []
-
-            # Read output line by line
-            if TQDM_AVAILABLE:
-                # Use tqdm for progress indication
-                with tqdm(desc="Streaming Output", total=0, bar_format="{desc}", leave=False) as progress_bar:
-                    for line in iter(process.stdout.readline, ''):
-                        if not line:
-                            break
-                        cleaned = line.rstrip()
-                        if cleaned:
-                            output_lines.append(cleaned)
-                            progress_bar.write(f"{Colors.WHITE}{cleaned}{Colors.RESET}")
-                process.wait()
-            else:
-                # Simple output without progress bar
-                output, _ = process.communicate()
-                output_lines = output.split('\n') if output else []
-                for line in output_lines:
-                    cleaned = line.strip()
-                    if cleaned:
-                        print(f"{Colors.WHITE}{cleaned}{Colors.RESET}")
-            
-            # Check return code
-            success = process.returncode == 0
-            
-            if success:
-                print(f"\n{Colors.GREEN}✓ {description} completed successfully!{Colors.RESET}")
-            else:
-                print(f"\n{Colors.RED}✗ {description} failed with return code {process.returncode}{Colors.RESET}")
-            
-            # Save to log file if specified
-            if log_file:
-                log_path = self.logs_dir / log_file
-                with open(log_path, 'a', encoding='utf-8') as f:
-                    f.write(f"\n{'=' * 60}\n")
-                    f.write(f"{datetime.now().isoformat()} - {description}\n")
-                    f.write(f"Command: {' '.join(command)}\n")
-                    f.write(f"Return Code: {process.returncode}\n")
-                    output_text = '\n'.join(output_lines)
-                    f.write(f"Output:\n{output_text}\n")
-            
-            return success, '\n'.join(output_lines)
-            
-        except subprocess.TimeoutExpired:
-            print(f"\n{Colors.RED}✗ {description} timed out{Colors.RESET}")
-            return False, "Operation timed out"
-        except Exception as e:
-            print(f"\n{Colors.RED}✗ {description} failed: {str(e)}{Colors.RESET}")
-            return False, str(e)
-    
     def check_package_installed(self, package_name: str) -> bool:
         """
         Check if a package is installed.
@@ -515,137 +288,285 @@ class RLTrainerMenu:
         except ImportError:
             return False
 
-    def check_installed_requirements(self) -> Tuple[List[str], List[str]]:
+    def check_installed_requirements(self, check_jax: bool = False) -> dict:
         """
         Check which requirements are already installed.
 
+        Args:
+            check_jax: If True, also check JAX requirements
+
         Returns:
-            Tuple of (installed_packages, missing_packages)
+            Dict with format:
+            {
+                'pytorch': {'installed': [...], 'missing': [...]},
+                'jax': {'installed': [...], 'missing': [...]}  # Only if check_jax=True
+            }
         """
+        result = {}
+
+        # Check PyTorch requirements
         requirements_file = self.project_dir / "requirements.txt"
         installed = []
         missing = []
 
-        with open(requirements_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith('#'):
-                    continue
+        if requirements_file.exists():
+            with open(requirements_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
 
-                # Extract package name
-                package = line.split('>=')[0].split('==')[0].split('<')[0].strip()
+                    # Extract package name (handle extras like jax[cuda12])
+                    package = line.split('>=')[0].split('==')[0].split('<')[0].split('[')[0].strip()
 
-                if self.check_package_installed(package):
-                    installed.append(package)
-                else:
-                    missing.append(package)
+                    if self.check_package_installed(package):
+                        installed.append(package)
+                    else:
+                        missing.append(package)
 
-        return installed, missing
+        result['pytorch'] = {'installed': installed, 'missing': missing}
+
+        # Check JAX requirements if requested
+        if check_jax:
+            jax_file = self.project_dir / "requirements-jax.txt"
+            jax_installed = []
+            jax_missing = []
+
+            if jax_file.exists():
+                with open(jax_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+
+                        # Extract package name (handle extras like jax[cuda12])
+                        package = line.split('>=')[0].split('==')[0].split('<')[0].split('[')[0].strip()
+
+                        if self.check_package_installed(package):
+                            jax_installed.append(package)
+                        else:
+                            jax_missing.append(package)
+
+            result['jax'] = {'installed': jax_installed, 'missing': jax_missing}
+
+        return result
+
+    def _install_requirements_with_numpy_fix(self, requirements_file: Path,
+                                            force_reinstall: bool = False,
+                                            upgrade: bool = False) -> Tuple[bool, str]:
+        """
+        Install requirements with NumPy pinned first to prevent binary incompatibility.
+
+        Args:
+            requirements_file: Path to requirements.txt file
+            force_reinstall: If True, force reinstall all packages
+            upgrade: If True, upgrade packages to latest versions
+
+        Returns:
+            Tuple of (success, output)
+        """
+        print(f"\n{Colors.CYAN}Using NumPy-first installation strategy to prevent binary incompatibility...{Colors.RESET}")
+
+        # Step 1: Install NumPy first with pinned version
+        numpy_cmd = [sys.executable, "-m", "pip", "install", "numpy>=1.26.4,<2.0"]
+
+        if force_reinstall:
+            numpy_cmd.insert(4, "--force-reinstall")
+        elif upgrade:
+            numpy_cmd.insert(4, "--upgrade")
+
+        print(f"\n{Colors.BOLD}Step 1/2: Installing NumPy with version constraints{Colors.RESET}")
+        success, numpy_output = run_command_with_progress(
+            numpy_cmd,
+            "Installing NumPy (prevents binary incompatibility)",
+            "numpy_install.log",
+            interactive=True
+        )
+
+        if not success:
+            print(f"{Colors.RED}Failed to install NumPy. Aborting installation.{Colors.RESET}")
+            return False, numpy_output
+
+        # Step 2: Install remaining requirements
+        print(f"\n{Colors.BOLD}Step 2/2: Installing remaining requirements{Colors.RESET}")
+        requirements_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)]
+
+        if force_reinstall:
+            requirements_cmd.insert(4, "--force-reinstall")
+        elif upgrade:
+            requirements_cmd.insert(4, "--upgrade")
+
+        success, requirements_output = run_command_with_progress(
+            requirements_cmd,
+            f"Installing requirements from {requirements_file.name}",
+            "requirements_install.log",
+            interactive=True
+        )
+
+        combined_output = f"{numpy_output}\n\n{requirements_output}"
+        return success, combined_output
 
     def install_requirements(self):
-        """Install requirements using pip with smart checking."""
+        """Install requirements using pip with smart checking and JAX support."""
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}║                  REQUIREMENTS INSTALLATION                    ║{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
 
-        # Check if requirements.txt exists
+        # Check if requirements files exist
         requirements_file = self.project_dir / "requirements.txt"
+        jax_requirements_file = self.project_dir / "requirements-jax.txt"
+
         if not requirements_file.exists():
             print(f"{Colors.RED}Error: requirements.txt not found in project directory{Colors.RESET}")
             return False
 
+        has_jax_file = jax_requirements_file.exists()
+
         print(f"{Colors.GREEN}Found requirements.txt at: {requirements_file}{Colors.RESET}")
+        if has_jax_file:
+            print(f"{Colors.GREEN}Found requirements-jax.txt at: {jax_requirements_file}{Colors.RESET}")
 
-        # Check what's already installed
+        # Check what's already installed (both PyTorch and JAX)
         print(f"\n{Colors.CYAN}Checking installed packages...{Colors.RESET}")
-        installed, missing = self.check_installed_requirements()
+        status = self.check_installed_requirements(check_jax=has_jax_file)
 
-        total = len(installed) + len(missing)
+        pytorch_installed = status['pytorch']['installed']
+        pytorch_missing = status['pytorch']['missing']
+        pytorch_total = len(pytorch_installed) + len(pytorch_missing)
 
-        # Display status
-        print(f"\n{Colors.BOLD}Installation Status:{Colors.RESET}")
-        print(f"{Colors.GREEN}  ✓ Installed: {len(installed)}/{total} packages{Colors.RESET}")
-        if missing:
-            print(f"{Colors.YELLOW}  ✗ Missing: {len(missing)}/{total} packages{Colors.RESET}")
+        # Display PyTorch status
+        print(f"\n{Colors.BOLD}PyTorch Requirements:{Colors.RESET}")
+        print(f"{Colors.GREEN}  ✓ Installed: {len(pytorch_installed)}/{pytorch_total} packages{Colors.RESET}")
+        if pytorch_missing:
+            print(f"{Colors.YELLOW}  ✗ Missing: {len(pytorch_missing)}/{pytorch_total} packages{Colors.RESET}")
 
-        # If all installed
-        if not missing:
+        # Display JAX status if available
+        jax_installed = []
+        jax_missing = []
+        if has_jax_file:
+            jax_installed = status['jax']['installed']
+            jax_missing = status['jax']['missing']
+            jax_total = len(jax_installed) + len(jax_missing)
+
+            print(f"\n{Colors.BOLD}JAX Requirements (Experimental):{Colors.RESET}")
+            print(f"{Colors.GREEN}  ✓ Installed: {len(jax_installed)}/{jax_total} packages{Colors.RESET}")
+            if jax_missing:
+                print(f"{Colors.YELLOW}  ✗ Missing: {len(jax_missing)}/{jax_total} packages{Colors.RESET}")
+
+        # Determine installation options
+        all_installed = not pytorch_missing and (not has_jax_file or not jax_missing)
+
+        if all_installed:
+            # Everything is installed
             print(f"\n{Colors.GREEN}{Colors.BOLD}✓ All requirements are already installed!{Colors.RESET}")
-            print(f"\n{Colors.CYAN}Installed packages:{Colors.RESET}")
-            for pkg in installed[:8]:  # Show first 8
+            print(f"\n{Colors.CYAN}PyTorch packages:{Colors.RESET}")
+            for pkg in pytorch_installed[:8]:
                 print(f"  • {pkg}")
-            if len(installed) > 8:
-                print(f"  ... and {len(installed) - 8} more")
+            if len(pytorch_installed) > 8:
+                print(f"  ... and {len(pytorch_installed) - 8} more")
+
+            if has_jax_file and jax_installed:
+                print(f"\n{Colors.CYAN}JAX packages:{Colors.RESET}")
+                for pkg in jax_installed[:5]:
+                    print(f"  • {pkg}")
+                if len(jax_installed) > 5:
+                    print(f"  ... and {len(jax_installed) - 5} more")
 
             print(f"\n{Colors.YELLOW}Options:{Colors.RESET}")
             print(f"  {Colors.GREEN}1. Return to Main Menu{Colors.RESET}")
-            print(f"  {Colors.CYAN}2. Reinstall All Packages (if having issues){Colors.RESET}")
-            print(f"  {Colors.CYAN}3. Upgrade All Packages{Colors.RESET}")
+            print(f"  {Colors.CYAN}2. Reinstall PyTorch Packages{Colors.RESET}")
+            if has_jax_file:
+                print(f"  {Colors.CYAN}3. Reinstall JAX Packages{Colors.RESET}")
+                print(f"  {Colors.CYAN}4. Reinstall Both PyTorch + JAX{Colors.RESET}")
+                valid_options = ["1", "2", "3", "4"]
+            else:
+                valid_options = ["1", "2"]
 
-            choice = self.get_user_input(
-                f"\n{Colors.YELLOW}Select option (1-3): {Colors.RESET}",
-                ["1", "2", "3"]
+            choice = get_user_input(
+                f"\n{Colors.YELLOW}Select option: {Colors.RESET}",
+                valid_options
             )
 
             if choice is None or choice == "1":
                 print(f"{Colors.GREEN}Returning to main menu...{Colors.RESET}")
                 return True
             elif choice == "2":
-                command = [sys.executable, "-m", "pip", "install", "--force-reinstall", "-r", "requirements.txt"]
-                description = "Reinstalling All Requirements"
-            else:  # choice == "3"
-                command = [sys.executable, "-m", "pip", "install", "--upgrade", "-r", "requirements.txt"]
-                description = "Upgrading All Requirements"
+                # Reinstall PyTorch only
+                success, _ = self._install_requirements_with_numpy_fix(requirements_file, force_reinstall=True)
+            elif has_jax_file and choice == "3":
+                # Reinstall JAX only
+                success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file, force_reinstall=True)
+            elif has_jax_file and choice == "4":
+                # Reinstall both
+                success1, _ = self._install_requirements_with_numpy_fix(requirements_file, force_reinstall=True)
+                if success1:
+                    success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file, force_reinstall=True)
+                else:
+                    success = False
+            else:
+                return True
 
-        # If some missing
         else:
-            print(f"\n{Colors.YELLOW}Missing packages:{Colors.RESET}")
-            for pkg in missing:
-                print(f"  • {pkg}")
-
-            if installed:
-                print(f"\n{Colors.GREEN}Already installed:{Colors.RESET}")
-                for pkg in installed[:5]:  # Show first 5
+            # Some packages are missing
+            if pytorch_missing:
+                print(f"\n{Colors.YELLOW}Missing PyTorch packages:{Colors.RESET}")
+                for pkg in pytorch_missing[:10]:
                     print(f"  • {pkg}")
-                if len(installed) > 5:
-                    print(f"  ... and {len(installed) - 5} more")
+                if len(pytorch_missing) > 10:
+                    print(f"  ... and {len(pytorch_missing) - 10} more")
 
-            print(f"\n{Colors.YELLOW}Options:{Colors.RESET}")
-            print(f"  {Colors.GREEN}1. Install Missing Packages Only{Colors.RESET}")
-            print(f"  {Colors.CYAN}2. Reinstall All Packages{Colors.RESET}")
-            print(f"  {Colors.RED}3. Cancel / Return to Main Menu{Colors.RESET}")
+            if has_jax_file and jax_missing:
+                print(f"\n{Colors.YELLOW}Missing JAX packages:{Colors.RESET}")
+                for pkg in jax_missing[:10]:
+                    print(f"  • {pkg}")
+                if len(jax_missing) > 10:
+                    print(f"  ... and {len(jax_missing) - 10} more")
 
-            choice = self.get_user_input(
-                f"\n{Colors.YELLOW}Select option (1-3): {Colors.RESET}",
-                ["1", "2", "3"]
+            print(f"\n{Colors.YELLOW}Installation Options:{Colors.RESET}")
+            print(f"  {Colors.GREEN}1. Install PyTorch Requirements Only{Colors.RESET}")
+            if has_jax_file:
+                print(f"  {Colors.GREEN}2. Install JAX Requirements Only{Colors.RESET}")
+                print(f"  {Colors.CYAN}3. Install Both PyTorch + JAX{Colors.RESET}")
+                print(f"  {Colors.RED}4. Cancel / Return to Main Menu{Colors.RESET}")
+                valid_options = ["1", "2", "3", "4"]
+                cancel_option = "4"
+            else:
+                print(f"  {Colors.RED}2. Cancel / Return to Main Menu{Colors.RESET}")
+                valid_options = ["1", "2"]
+                cancel_option = "2"
+
+            choice = get_user_input(
+                f"\n{Colors.YELLOW}Select option: {Colors.RESET}",
+                valid_options
             )
 
-            if choice is None or choice == "3":
+            if choice is None or choice == cancel_option:
                 print(f"{Colors.YELLOW}Installation cancelled. Returning to main menu...{Colors.RESET}")
                 return False
             elif choice == "1":
-                command = [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"]
-                description = "Installing Missing Requirements"
-            else:  # choice == "2"
-                command = [sys.executable, "-m", "pip", "install", "--force-reinstall", "-r", "requirements.txt"]
-                description = "Reinstalling All Requirements"
-
-        # Run installation
-        print()  # Blank line for readability
-        success, output = self.run_command_with_progress(
-            command,
-            description,
-            "installation.log"
-        )
+                # Install PyTorch only
+                success, _ = self._install_requirements_with_numpy_fix(requirements_file)
+            elif has_jax_file and choice == "2":
+                # Install JAX only
+                success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file)
+            elif has_jax_file and choice == "3":
+                # Install both
+                success1, _ = self._install_requirements_with_numpy_fix(requirements_file)
+                if success1:
+                    success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file)
+                else:
+                    success = False
+            else:
+                return False
 
         if success:
             print(f"\n{Colors.GREEN}✓ Installation completed successfully!{Colors.RESET}")
-            print(f"{Colors.CYAN}All dependencies are now installed.{Colors.RESET}")
-            print(f"{Colors.CYAN}You can now use all features of the RL Trading System.{Colors.RESET}")
+            print(f"{Colors.CYAN}All requested dependencies are now installed.{Colors.RESET}")
+            print(f"{Colors.CYAN}You can now use the RL Trading System features.{Colors.RESET}")
         else:
             print(f"\n{Colors.RED}✗ Installation failed. Check logs for details.{Colors.RESET}")
-            print(f"{Colors.YELLOW}Tip: Try running 'pip install -r requirements.txt' manually{Colors.RESET}")
+            print(f"{Colors.YELLOW}Tip: Try running installation commands manually{Colors.RESET}")
 
         return success
     
@@ -670,7 +591,7 @@ class RLTrainerMenu:
 
         print(f"\n{Colors.YELLOW}  3. Back to Main Menu{Colors.RESET}")
 
-        choice = self.get_user_input(
+        choice = get_user_input(
             f"\n{Colors.YELLOW}Select option (1-3): {Colors.RESET}",
             ["1", "2", "3"]
         )
@@ -697,7 +618,7 @@ class RLTrainerMenu:
         print(f"{Colors.GREEN}Selected instrument: {instrument}{Colors.RESET}")
 
         # Confirm selection
-        confirm = self.get_user_input(
+        confirm = get_user_input(
             f"{Colors.YELLOW}Process data for {instrument}? (y/n): {Colors.RESET}",
             ["y", "n", "Y", "N"]
         )
@@ -713,7 +634,7 @@ class RLTrainerMenu:
             return False
 
         command = [sys.executable, str(update_script), "--market", instrument]
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             f"Processing {instrument} Data",
             f"data_processing_{instrument.lower()}.log"
@@ -749,40 +670,23 @@ class RLTrainerMenu:
         print(f"\n{Colors.CYAN}Running incremental update for {instrument}...{Colors.RESET}")
         print(f"{Colors.YELLOW}Note: You will be asked to confirm before any changes are made.{Colors.RESET}\n")
 
-        # Set up environment with project root in PYTHONPATH for imports
-        env = os.environ.copy()
-        pythonpath = str(self.project_dir)
-        if 'PYTHONPATH' in env:
-            env['PYTHONPATH'] = f"{pythonpath}{os.pathsep}{env['PYTHONPATH']}"
-        else:
-            env['PYTHONPATH'] = pythonpath
-
-        # Run with subprocess to show interactive output
+        # Run with interactive mode to allow user prompts
         command = [sys.executable, str(incremental_script), "--market", instrument]
 
-        try:
-            # Run interactively (user will see prompts and can respond)
-            result = subprocess.run(
-                command,
-                cwd=self.project_dir,
-                env=env,  # Pass environment with PYTHONPATH configured
-                check=False
-            )
+        success, _ = run_command_with_progress(
+            command,
+            f"Incremental Data Update ({instrument})",
+            "incremental_update.log",
+            interactive=True
+        )
 
-            success = (result.returncode == 0)
+        if success:
+            print(f"\n{Colors.GREEN}✓ Incremental update completed for {instrument}!{Colors.RESET}")
+            print(f"{Colors.CYAN}Existing data has been updated with new dates.{Colors.RESET}")
+        else:
+            print(f"\n{Colors.YELLOW}Incremental update exited with errors. Check logs/incremental_update.log{Colors.RESET}")
 
-            if success:
-                print(f"\n{Colors.GREEN}✓ Incremental update completed for {instrument}!{Colors.RESET}")
-                print(f"{Colors.CYAN}Existing data has been updated with new dates.{Colors.RESET}")
-            else:
-                print(f"\n{Colors.YELLOW}Incremental update exited with code {result.returncode}{Colors.RESET}")
-
-            return success
-
-        except Exception as e:
-            print(f"\n{Colors.RED}✗ Incremental update failed: {str(e)}{Colors.RESET}")
-            self.logger.error(f"Incremental update error: {str(e)}")
-            return False
+        return success
     
     def train_model(self):
         """Handle model training with test/production options."""
@@ -792,7 +696,7 @@ class RLTrainerMenu:
 
         while True:
             self.display_training_menu()
-            choice = self.get_user_input(
+            choice = get_user_input(
                 f"{Colors.YELLOW}Select training option: {Colors.RESET}",
                 list(self.training_menu_options.keys())
             )
@@ -828,7 +732,7 @@ class RLTrainerMenu:
         print()
 
         # Confirm
-        confirm = self.get_user_input(
+        confirm = get_user_input(
             f"{Colors.YELLOW}Proceed with complete pipeline test? (y/n): {Colors.RESET}",
             ["y", "n", "Y", "N"]
         )
@@ -838,10 +742,15 @@ class RLTrainerMenu:
             return False
 
         # Market selection - ONCE for entire pipeline
-        selected_market = self.detect_and_select_market()
+        selected_market = detect_and_select_market(self.project_dir)
         if selected_market is None:
             print(f"{Colors.YELLOW}Pipeline cancelled - no market selected.{Colors.RESET}")
             return False
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
 
         print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*60}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}Starting Complete Training Pipeline for {selected_market}{Colors.RESET}")
@@ -868,8 +777,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 1: Entry Learning (Test Mode)",
             "pipeline_test_phase1.log"
@@ -915,8 +826,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 2: Position Management (Test Mode)",
             "pipeline_test_phase2.log"
@@ -961,7 +874,7 @@ class RLTrainerMenu:
 
                 if gpu_mem < 8:
                     print(f"{Colors.YELLOW}⚠ Warning: GPU memory may be insufficient for optimal LLM performance.{Colors.RESET}")
-                    proceed = self.get_user_input(
+                    proceed = get_user_input(
                         f"{Colors.YELLOW}Continue with Phase 3? (y/n): {Colors.RESET}",
                         ["y", "n", "Y", "N"]
                     )
@@ -970,7 +883,7 @@ class RLTrainerMenu:
                         return True
             else:
                 print(f"{Colors.YELLOW}⚠ No GPU detected. LLM inference will be slow.{Colors.RESET}")
-                proceed = self.get_user_input(
+                proceed = get_user_input(
                     f"{Colors.YELLOW}Continue with CPU (slow)? (y/n): {Colors.RESET}",
                     ["y", "n", "Y", "N"]
                 )
@@ -998,8 +911,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 3: Extended RL - 261D Obs (Test Mode)",
             "pipeline_test_phase3.log"
@@ -1048,7 +963,7 @@ class RLTrainerMenu:
         print()
 
         # Confirm
-        confirm = self.get_user_input(
+        confirm = get_user_input(
             f"{Colors.YELLOW}Proceed with complete production pipeline? (y/n): {Colors.RESET}",
             ["y", "n", "Y", "N"]
         )
@@ -1058,10 +973,15 @@ class RLTrainerMenu:
             return False
 
         # Market selection - ONCE for entire pipeline
-        selected_market = self.detect_and_select_market()
+        selected_market = detect_and_select_market(self.project_dir)
         if selected_market is None:
             print(f"{Colors.YELLOW}Pipeline cancelled - no market selected.{Colors.RESET}")
             return False
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
 
         print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*60}{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}Starting Complete Production Pipeline for {selected_market}{Colors.RESET}")
@@ -1087,8 +1007,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 1: Entry Learning (Production Mode)",
             "pipeline_production_phase1.log"
@@ -1120,8 +1042,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 2: Position Management (Production Mode)",
             "pipeline_production_phase2.log"
@@ -1154,7 +1078,7 @@ class RLTrainerMenu:
                 if gpu_mem < 8:
                     print(f"{Colors.YELLOW}⚠ Warning: GPU memory ({gpu_mem:.1f}GB) is below recommended 8GB.{Colors.RESET}")
                     print(f"{Colors.YELLOW}   LLM training may be slow or fail due to memory constraints.{Colors.RESET}")
-                    proceed = self.get_user_input(
+                    proceed = get_user_input(
                         f"{Colors.YELLOW}Continue with Phase 3? (y/n): {Colors.RESET}",
                         ["y", "n", "Y", "N"]
                     )
@@ -1163,7 +1087,7 @@ class RLTrainerMenu:
                         return True
             else:
                 print(f"{Colors.RED}✗ No GPU detected. Phase 3 requires GPU for production training.{Colors.RESET}")
-                proceed = self.get_user_input(
+                proceed = get_user_input(
                     f"{Colors.YELLOW}Attempt CPU training (NOT recommended, very slow)? (y/n): {Colors.RESET}",
                     ["y", "n", "Y", "N"]
                 )
@@ -1190,8 +1114,10 @@ class RLTrainerMenu:
             "--market", selected_market,
             "--non-interactive"
         ]
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
 
-        success, output = self.run_command_with_progress(
+        success, output = run_command_with_progress(
             command,
             "Phase 3: Extended RL - 261D Obs (Production Mode)",
             "pipeline_production_phase3.log"
@@ -1231,6 +1157,9 @@ class RLTrainerMenu:
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}║           CONTINUE TRAINING FROM EXISTING MODEL              ║{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+
+        # Lazy import to avoid bootstrap dependency issues
+        from src.model_utils import detect_models_in_folder, display_model_selection
 
         models = detect_models_in_folder(str(self.project_dir / "models"))
         if not models:
@@ -1272,7 +1201,7 @@ class RLTrainerMenu:
         print(f"\n{Colors.GREEN}Selected model: {selected_model['name']} ({model_type.upper()}){Colors.RESET}")
 
         # Determine run mode (test vs production)
-        mode_choice = self.get_user_input(
+        mode_choice = get_user_input(
             f"{Colors.YELLOW}Run continuation in test mode (1) or production (2)? {Colors.RESET}",
             ["1", "2"]
         )
@@ -1287,11 +1216,16 @@ class RLTrainerMenu:
             print(f"{Colors.CYAN}Detected market from metadata: {market}{Colors.RESET}")
         else:
             print(f"{Colors.YELLOW}Market metadata missing. Select a dataset to continue.{Colors.RESET}")
-            market = self.detect_and_select_market()
+            market = detect_and_select_market(self.project_dir)
             if not market:
                 print(f"{Colors.YELLOW}Continuation cancelled - market required.{Colors.RESET}")
                 return False
         market = market.upper()
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
 
         command = [
             sys.executable,
@@ -1307,7 +1241,10 @@ class RLTrainerMenu:
         if run_test:
             command.append("--test")
 
-        success, _ = self.run_command_with_progress(
+        if hardware_profile:
+            command.extend(["--hardware-profile", hardware_profile])
+
+        success, _ = run_command_with_progress(
             command,
             f"{description} ({'Test' if run_test else 'Production'} Mode)",
             log_file
@@ -1326,6 +1263,9 @@ class RLTrainerMenu:
         print(f"{Colors.BOLD}{Colors.CYAN}║                         EVALUATOR                              ║{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
 
+        # Lazy import to avoid bootstrap dependency issues
+        from src.model_utils import detect_models_in_folder
+
         eval_script = self.src_dir / "evaluate_phase3_llm.py"
         if not eval_script.exists():
             print(f"{Colors.RED}Error: evaluate_phase3_llm.py not found{Colors.RESET}")
@@ -1343,17 +1283,17 @@ class RLTrainerMenu:
         market = metadata.get('market')
 
         if not market:
-            market = self.detect_and_select_market()
+            market = detect_and_select_market(self.project_dir)
             if not market:
                 print(f"{Colors.YELLOW}Evaluation cancelled - no market selected.{Colors.RESET}")
                 return False
 
-        episodes = self.get_user_input(
+        episodes = get_user_input(
             f"{Colors.YELLOW}Evaluation episodes (default 20): {Colors.RESET}"
         )
         episodes = episodes if episodes and episodes.isdigit() else "20"
 
-        holdout_fraction_input = self.get_user_input(
+        holdout_fraction_input = get_user_input(
             f"{Colors.YELLOW}Holdout fraction (0-1, default 0.2): {Colors.RESET}"
         )
         try:
@@ -1361,7 +1301,7 @@ class RLTrainerMenu:
         except ValueError:
             holdout_fraction = 0.2
 
-        confirm = self.get_user_input(
+        confirm = get_user_input(
             f"{Colors.YELLOW}Evaluate {latest_model['name']} on {market} holdout data? (y/n): {Colors.RESET}",
             ["y", "n", "Y", "N"]
         )
@@ -1383,7 +1323,7 @@ class RLTrainerMenu:
             "--baseline-model", "auto"
         ]
 
-        success, _ = self.run_command_with_progress(
+        success, _ = run_command_with_progress(
             command,
             "Phase 3 Extended RL Evaluation",
             "evaluation_phase3.log"
@@ -1405,7 +1345,451 @@ class RLTrainerMenu:
                 print(f"{Colors.CYAN}Results saved in results/{Colors.RESET}")
                 for name in artifacts:
                     print(f"  - {name}")
-    
+
+    def run_stress_test(self):
+        """Run hardware stress test and auto-tuning."""
+        print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}║              HARDWARE STRESS TEST & AUTO-TUNE                  ║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+        print(f"\n{Colors.YELLOW}This will test your hardware and determine optimal settings.{Colors.RESET}\n")
+
+        # Check which stress test scripts are available
+        jax_stress = self.project_dir / "scripts" / "stress_hardware_jax.py"
+        autotune_stress = self.project_dir / "scripts" / "stress_hardware_autotune.py"
+
+        if not jax_stress.exists() and not autotune_stress.exists():
+            print(f"{Colors.RED}No stress test scripts found in scripts/ directory.{Colors.RESET}")
+            return False
+
+        # Prefer autotune version if available
+        script_to_run = autotune_stress if autotune_stress.exists() else jax_stress
+        script_name = script_to_run.name
+
+        print(f"{Colors.CYAN}Running: {script_name}{Colors.RESET}\n")
+
+        success, _ = run_command_with_progress(
+            [sys.executable, str(script_to_run)],
+            "Hardware Stress Test",
+            "stress_test.log"
+        )
+
+        if success:
+            print(f"\n{Colors.GREEN}✓ Stress test completed! Check logs/stress_test.log for results.{Colors.RESET}")
+        else:
+            print(f"\n{Colors.RED}✗ Stress test failed. Check logs/stress_test.log{Colors.RESET}")
+
+        return success
+
+    def run_hybrid_test(self):
+        """Run hardware-maximized hybrid LLM/GPU validation test."""
+        print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}║           HYBRID LLM/GPU VALIDATION TEST                       ║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+        print(f"\n{Colors.YELLOW}Hardware-maximized validation combining LLM reasoning with GPU-accelerated RL.{Colors.RESET}\n")
+
+        # Check if the hybrid test script exists
+        test_script = self.project_dir / "scripts" / "run_hybrid_test.py"
+        if not test_script.exists():
+            print(f"{Colors.RED}Hybrid test script not found: {test_script}{Colors.RESET}")
+            return False
+
+        # Market selection
+        market = detect_and_select_market(self.project_dir)
+        if not market:
+            return False
+
+        # Preset selection
+        print(f"\n{Colors.BOLD}{Colors.YELLOW}SELECT VALIDATION PRESET:{Colors.RESET}")
+        preset_options = {
+            "1": ("Fast - Quick validation (5% timesteps, 12 envs, ~15-20 min)", "fast"),
+            "2": ("Heavy - Thorough validation (15% timesteps, 24 envs, ~45-60 min)", "heavy")
+        }
+
+        for key, (desc, _) in preset_options.items():
+            print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        preset_choice = get_user_input(
+            f"{Colors.YELLOW}Select preset (1-2): {Colors.RESET}",
+            list(preset_options.keys())
+        )
+
+        if preset_choice is None:
+            print(f"{Colors.YELLOW}Test cancelled.{Colors.RESET}")
+            return False
+
+        preset = preset_options[preset_choice][1]
+
+        # Display configuration and confirm
+        print(f"\n{Colors.BOLD}{Colors.GREEN}TEST CONFIGURATION:{Colors.RESET}")
+        print(f"{Colors.CYAN}  Market: {market}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Preset: {preset}{Colors.RESET}")
+        print()
+
+        confirm = prompt_confirm("Start hybrid LLM/GPU validation test?", default_yes=True)
+        if not confirm:
+            print(f"{Colors.YELLOW}Test cancelled.{Colors.RESET}")
+            return False
+
+        print(f"\n{Colors.CYAN}Starting hybrid validation test...{Colors.RESET}\n")
+
+        # Run the hybrid test script
+        command = [
+            sys.executable, str(test_script),
+            "--market", market,
+            "--preset", preset
+        ]
+
+        success, _ = run_command_with_progress(
+            command,
+            f"Hybrid LLM/GPU Validation ({market}, {preset} preset)",
+            f"hybrid_test_{market.lower()}_{preset}.log"
+        )
+
+        if success:
+            print(f"\n{Colors.GREEN}✓ Hybrid validation test completed!{Colors.RESET}")
+        else:
+            print(f"\n{Colors.RED}✗ Hybrid validation test failed.{Colors.RESET}")
+
+        return success
+
+    def run_jax_training_menu(self):
+        """JAX training submenu."""
+        while True:
+            clear_screen()
+            print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.CYAN}║              JAX TRAINING (EXPERIMENTAL)                       ║{Colors.RESET}")
+            print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+            print()
+
+            for key, value in self.jax_training_menu_options.items():
+                color = Colors.YELLOW if key == "5" else Colors.GREEN
+                print(f"{color}  {key}. {value}{Colors.RESET}")
+            print()
+
+            choice = get_user_input(
+                f"{Colors.YELLOW}Select JAX option: {Colors.RESET}",
+                list(self.jax_training_menu_options.keys())
+            )
+
+            if choice is None or choice == "5":
+                break
+
+            if choice == "1":
+                self.run_jax_quickstart()
+            elif choice == "2":
+                self.run_jax_phase1()
+            elif choice == "3":
+                self.run_jax_phase2()
+            elif choice == "4":
+                self.run_custom_jax_training()
+
+            # Pause before returning to menu so user can see results
+            print()
+            input(f"{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
+
+    def run_jax_quickstart(self):
+        """Run JAX installation validation."""
+        script = self.src_dir / "jax_migration" / "quickstart.py"
+        if not script.exists():
+            print(f"{Colors.RED}JAX quickstart script not found: {script}{Colors.RESET}")
+            return False
+
+        success, _ = run_command_with_progress(
+            [sys.executable, str(script)],
+            "JAX Installation Validation",
+            "jax_quickstart.log"
+        )
+        return success
+
+    def run_jax_phase1(self):
+        """Run JAX Phase 1 training."""
+        market = detect_and_select_market(self.project_dir)
+        if not market:
+            return False
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        num_envs = None
+
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
+            try:
+                with open(hardware_profile, 'r') as f:
+                    profile_data = yaml.safe_load(f)
+                    if 'num_envs' in profile_data:
+                        num_envs = int(profile_data['num_envs'])
+                        print(f"{Colors.CYAN}  - Loaded num_envs: {num_envs}{Colors.RESET}")
+            except Exception as e:
+                print(f"{Colors.RED}Failed to load profile: {e}{Colors.RESET}")
+                hardware_profile = None
+
+        if num_envs is None:
+            env_options = {
+                "1": 512,
+                "2": 1024,
+                "3": 2048,
+                "4": 4096
+            }
+            print(f"\n{Colors.BOLD}Choose number of environments:{Colors.RESET}")
+            print(f"{Colors.CYAN}  1. 512   (conservative, ~4GB){Colors.RESET}")
+            print(f"{Colors.CYAN}  2. 1024  (balanced, ~6GB){Colors.RESET}")
+            print(f"{Colors.CYAN}  3. 2048  (high performance, ~10GB){Colors.RESET}")
+            print(f"{Colors.CYAN}  4. 4096  (max throughput, ~18GB){Colors.RESET}")
+
+            env_choice = get_user_input(
+                f"{Colors.YELLOW}Select environment count (1-4): {Colors.RESET}",
+                list(env_options.keys())
+            )
+            if env_choice is None:
+                return False
+            num_envs = env_options[env_choice]
+
+        timestep_options = {
+            "1": 500_000,
+            "2": 2_000_000,
+            "3": 5_000_000,
+            "4": 10_000_000,
+            "5": 20_000_000
+        }
+        print(f"\n{Colors.BOLD}Choose total timesteps:{Colors.RESET}")
+        print(f"{Colors.CYAN}  1. 500,000      (quick test - ~30 sec){Colors.RESET}")
+        print(f"{Colors.CYAN}  2. 2,000,000    (baseline - ~2 min, foundation quality){Colors.RESET}")
+        print(f"{Colors.CYAN}  3. 5,000,000    (balanced - ~5 min, good foundation){Colors.RESET}")
+        print(f"{Colors.CYAN}  4. 10,000,000   (recommended - ~10 min, strong foundation){Colors.RESET}")
+        print(f"{Colors.CYAN}  5. 20,000,000   (extended - ~20 min, excellent foundation){Colors.RESET}")
+
+        ts_choice = get_user_input(
+            f"{Colors.YELLOW}Select total timesteps (1-5): {Colors.RESET}",
+            list(timestep_options.keys())
+        )
+        if ts_choice is None:
+            return False
+        timesteps = timestep_options[ts_choice]
+
+        confirm = get_user_input(
+            f"{Colors.YELLOW}Start JAX Phase 1 for {market} with {num_envs} envs and {timesteps:,} steps? (y/n): {Colors.RESET}",
+            ["y", "n", "Y", "N"]
+        )
+        if confirm is None or confirm.lower() != "y":
+            print(f"{Colors.YELLOW}JAX Phase 1 cancelled.{Colors.RESET}")
+            return False
+
+        # Determine which module to use
+        script_fixed = self.src_dir / "jax_migration" / "train_ppo_jax_fixed.py"
+        script_normal = self.src_dir / "jax_migration" / "train_ppo_jax.py"
+
+        if script_fixed.exists():
+            module_name = "src.jax_migration.train_ppo_jax_fixed"
+        elif script_normal.exists():
+            module_name = "src.jax_migration.train_ppo_jax"
+        else:
+            print(f"{Colors.RED}JAX Phase 1 script not found{Colors.RESET}")
+            return False
+
+        print(f"\n{Colors.CYAN}Starting JAX Phase 1 training for {market}...{Colors.RESET}\n")
+
+        # Run as module to support relative imports
+        command = [
+            sys.executable, "-m", module_name,
+            "--market", market,
+            "--num_envs", str(num_envs),
+            "--total_timesteps", str(timesteps),
+            "--data_path", str(self.project_dir / "data" / f"{market}_D1M.csv")
+        ]
+
+        success, _ = run_command_with_progress(
+            command,
+            f"JAX Phase 1 Training ({market}, {num_envs} envs, {timesteps:,} steps)",
+            f"jax_phase1_{market.lower()}.log"
+        )
+        return success
+
+    def run_jax_phase2(self):
+        """Run JAX Phase 2 training with hardware profile support."""
+        market = detect_and_select_market(self.project_dir)
+        if not market:
+            return False
+
+        script = self.src_dir / "jax_migration" / "train_phase2_jax.py"
+        if not script.exists():
+            print(f"{Colors.RED}JAX Phase 2 script not found: {script}{Colors.RESET}")
+            return False
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        num_envs = None
+
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
+            try:
+                with open(hardware_profile, 'r') as f:
+                    profile_data = yaml.safe_load(f)
+                    if 'num_envs' in profile_data:
+                        num_envs = int(profile_data['num_envs'])
+                        print(f"{Colors.CYAN}  - Loaded num_envs: {num_envs}{Colors.RESET}")
+            except Exception as e:
+                print(f"{Colors.RED}Failed to load profile: {e}{Colors.RESET}")
+                hardware_profile = None
+
+        if num_envs is None:
+            # Prompt user to select num_envs manually
+            print(f"\n{Colors.BOLD}{Colors.YELLOW}SELECT NUMBER OF PARALLEL ENVIRONMENTS:{Colors.RESET}")
+            env_options = {
+                "1": ("512 envs", 512),
+                "2": ("1024 envs", 1024),
+                "3": ("2048 envs (Recommended)", 2048),
+                "4": ("4096 envs (High-end hardware)", 4096)
+            }
+
+            for key, (desc, _) in env_options.items():
+                print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+            env_choice = get_user_input(
+                f"{Colors.YELLOW}Select option (1-4): {Colors.RESET}",
+                list(env_options.keys())
+            )
+
+            if env_choice is None:
+                print(f"{Colors.YELLOW}Training cancelled.{Colors.RESET}")
+                return False
+
+            num_envs = env_options[env_choice][1]
+
+        # Prompt for timesteps
+        print(f"\n{Colors.BOLD}{Colors.YELLOW}SELECT TRAINING DURATION:{Colors.RESET}")
+        timestep_options = {
+            "1": ("Quick Test - 500K steps (~5-10 min)", 500_000),
+            "2": ("Short - 5M steps (~1 hour, 2.5x Phase 1)", 5_000_000),
+            "3": ("Standard - 10M steps (~2 hours, matches Phase 1)", 10_000_000),
+            "4": ("Extended - 25M steps (~5 hours, 2.5x Phase 1)", 25_000_000),
+            "5": ("Production - 50M steps (~10 hours, 5x Phase 1)", 50_000_000),
+            "6": ("Maximum - 100M steps (~20 hours, 10x Phase 1)", 100_000_000)
+        }
+
+        for key, (desc, _) in timestep_options.items():
+            print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        timestep_choice = get_user_input(
+            f"{Colors.YELLOW}Select option (1-6): {Colors.RESET}",
+            list(timestep_options.keys())
+        )
+
+        if timestep_choice is None:
+            print(f"{Colors.YELLOW}Training cancelled.{Colors.RESET}")
+            return False
+
+        timesteps = timestep_options[timestep_choice][1]
+
+        # Display configuration and confirm
+        print(f"\n{Colors.BOLD}{Colors.GREEN}TRAINING CONFIGURATION:{Colors.RESET}")
+        print(f"{Colors.CYAN}  Market: {market}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Parallel Environments: {num_envs}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Total Timesteps: {timesteps:,}{Colors.RESET}")
+        if hardware_profile:
+            print(f"{Colors.CYAN}  Hardware Profile: {Path(hardware_profile).name}{Colors.RESET}")
+        print()
+
+        confirm = prompt_confirm("Start JAX Phase 2 training with these settings?", default_yes=True)
+        if not confirm:
+            print(f"{Colors.YELLOW}Training cancelled.{Colors.RESET}")
+            return False
+
+        print(f"\n{Colors.CYAN}Starting JAX Phase 2 training for {market}...{Colors.RESET}\n")
+
+        # Run as module to support relative imports
+        command = [
+            sys.executable, "-m", "src.jax_migration.train_phase2_jax",
+            "--num_envs", str(num_envs),
+            "--total_timesteps", str(timesteps),
+            "--data_path", str(self.project_dir / "data" / f"{market}_D1M.csv"),
+            "--checkpoint_dir", str(self.project_dir / "models" / f"phase2_jax_{market.lower()}")
+        ]
+
+        success, _ = run_command_with_progress(
+            command,
+            f"JAX Phase 2 Training ({market})",
+            f"jax_phase2_{market.lower()}.log"
+        )
+        return success
+
+    def run_custom_jax_training(self):
+        """Run custom JAX training with hardware profile support."""
+        print(f"\n{Colors.BOLD}{Colors.YELLOW}CUSTOM JAX TRAINING{Colors.RESET}\n")
+
+        market = detect_and_select_market(self.project_dir)
+        if not market:
+            return False
+
+        # Hardware Profile Selection
+        hardware_profile = select_hardware_profile(self.project_dir)
+        default_envs = 1024
+        default_steps = 2_000_000
+
+        if hardware_profile:
+            print(f"{Colors.GREEN}Using hardware profile: {Path(hardware_profile).name}{Colors.RESET}")
+            try:
+                with open(hardware_profile, 'r') as f:
+                    profile_data = yaml.safe_load(f)
+                    if 'num_envs' in profile_data:
+                        default_envs = int(profile_data['num_envs'])
+                        print(f"{Colors.CYAN}  - Loaded num_envs default: {default_envs}{Colors.RESET}")
+                    if 'total_timesteps' in profile_data:
+                        default_steps = int(profile_data['total_timesteps'])
+                        print(f"{Colors.CYAN}  - Loaded timesteps default: {default_steps}{Colors.RESET}")
+            except Exception as e:
+                print(f"{Colors.RED}Failed to load profile: {e}{Colors.RESET}")
+                hardware_profile = None
+
+        # Get custom parameters (with profile-based defaults)
+        print(f"\n{Colors.BOLD}{Colors.YELLOW}CUSTOM PARAMETERS:{Colors.RESET}")
+        envs_input = get_user_input(f"{Colors.YELLOW}Number of environments (default {default_envs}): {Colors.RESET}")
+        envs = envs_input if envs_input else str(default_envs)
+
+        steps_input = get_user_input(f"{Colors.YELLOW}Total timesteps (default {default_steps:,}): {Colors.RESET}")
+        steps = steps_input if steps_input else str(default_steps)
+
+        # Display configuration and confirm
+        print(f"\n{Colors.BOLD}{Colors.GREEN}TRAINING CONFIGURATION:{Colors.RESET}")
+        print(f"{Colors.CYAN}  Market: {market}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Parallel Environments: {envs}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Total Timesteps: {int(steps):,}{Colors.RESET}")
+        if hardware_profile:
+            print(f"{Colors.CYAN}  Hardware Profile: {Path(hardware_profile).name}{Colors.RESET}")
+        print()
+
+        confirm = prompt_confirm("Start custom JAX training with these settings?", default_yes=True)
+        if not confirm:
+            print(f"{Colors.YELLOW}Training cancelled.{Colors.RESET}")
+            return False
+
+        # Determine which module to use
+        script_fixed = self.src_dir / "jax_migration" / "train_ppo_jax_fixed.py"
+        script_normal = self.src_dir / "jax_migration" / "train_ppo_jax.py"
+
+        if script_fixed.exists():
+            module_name = "src.jax_migration.train_ppo_jax_fixed"
+        elif script_normal.exists():
+            module_name = "src.jax_migration.train_ppo_jax"
+        else:
+            print(f"{Colors.RED}JAX training script not found{Colors.RESET}")
+            return False
+
+        # Run as module to support relative imports
+        command = [
+            sys.executable, "-m", module_name,
+            "--market", market,
+            "--num_envs", envs,
+            "--total_timesteps", steps,
+            "--data_path", str(self.project_dir / "data" / f"{market}_D1M.csv")
+        ]
+
+        success, _ = run_command_with_progress(
+            command,
+            f"Custom JAX Training ({market}, {envs} envs, {steps} steps)",
+            f"jax_custom_{market.lower()}.log"
+        )
+        return success
+
     def show_instructions(self):
         """Show first-time user instructions."""
         instructions = f"""
@@ -1460,11 +1844,11 @@ class RLTrainerMenu:
         
         while True:
             try:
-                self.clear_screen()
+                clear_screen()
                 self.display_banner()
                 self.display_main_menu()
                 
-                choice = self.get_user_input(
+                choice = get_user_input(
                     f"{Colors.YELLOW}Select an option: {Colors.RESET}",
                     list(self.main_menu_options.keys())
                 )
@@ -1478,18 +1862,24 @@ class RLTrainerMenu:
                 elif choice == "2":
                     self.process_data()
                 elif choice == "3":
-                    self.train_model()
+                    self.run_stress_test()
                 elif choice == "4":
-                    self.run_evaluation()
+                    self.run_hybrid_test()
                 elif choice == "5":
+                    self.train_model()
+                elif choice == "6":
+                    self.run_jax_training_menu()
+                elif choice == "7":
+                    self.run_evaluation()
+                elif choice == "8":
                     print(f"\n{Colors.GREEN}Thank you for using RL TRAINER!{Colors.RESET}")
                     print(f"{Colors.CYAN}Goodbye!{Colors.RESET}")
                     break
                 else:
                     print(f"{Colors.RED}Invalid option. Please try again.{Colors.RESET}")
                     time.sleep(2)
-                
-                if choice != "5":
+
+                if choice != "8":
                     input(f"\n{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
                     
             except KeyboardInterrupt:

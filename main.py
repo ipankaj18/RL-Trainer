@@ -24,6 +24,7 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+import shutil
 
 # Import CLI utilities (refactored from inline definitions)
 from src.cli_utils import (
@@ -51,7 +52,7 @@ class RLTrainerMenu:
         self.main_menu_options = {
             "1": "Requirements Installation",
             "2": "Data Processing",
-            "3": "Hardware Stress Test & Auto-tune",
+            "3": "Hardware Stress Test & Auto-tune (JAX/PyTorch)",
             "4": "Hybrid LLM/GPU Test Run",
             "5": "Training Model (PyTorch)",
             "6": "JAX Training (Experimental)",
@@ -176,7 +177,7 @@ class RLTrainerMenu:
         print()
         
         for key, value in self.main_menu_options.items():
-            if key == "7":  # Exit option
+            if key == "8":  # Exit option
                 print(f"{Colors.RED}  {key}. {value}{Colors.RESET}")
             else:
                 print(f"{Colors.GREEN}  {key}. {value}{Colors.RESET}")
@@ -288,6 +289,25 @@ class RLTrainerMenu:
         except ImportError:
             return False
 
+    def check_system_dependencies(self) -> dict:
+        """
+        Check for system-level dependencies (Node.js, NPM).
+        
+        Returns:
+            Dict with 'installed' and 'missing' lists
+        """
+        dependencies = ['node', 'npm']
+        installed = []
+        missing = []
+        
+        for dep in dependencies:
+            if shutil.which(dep):
+                installed.append(dep)
+            else:
+                missing.append(dep)
+                
+        return {'installed': installed, 'missing': missing}
+
     def check_installed_requirements(self, check_jax: bool = False) -> dict:
         """
         Check which requirements are already installed.
@@ -349,6 +369,9 @@ class RLTrainerMenu:
                             jax_missing.append(package)
 
             result['jax'] = {'installed': jax_installed, 'missing': jax_missing}
+
+        # Check system dependencies
+        result['system'] = self.check_system_dependencies()
 
         return result
 
@@ -454,8 +477,20 @@ class RLTrainerMenu:
             if jax_missing:
                 print(f"{Colors.YELLOW}  ✗ Missing: {len(jax_missing)}/{jax_total} packages{Colors.RESET}")
 
+        # Display System status
+        system_status = status.get('system', {'installed': [], 'missing': []})
+        sys_installed = system_status['installed']
+        sys_missing = system_status['missing']
+        
+        if sys_installed or sys_missing:
+            print(f"\n{Colors.BOLD}System Dependencies (Dashboard):{Colors.RESET}")
+            if sys_installed:
+                print(f"{Colors.GREEN}  ✓ Installed: {', '.join(sys_installed)}{Colors.RESET}")
+            if sys_missing:
+                print(f"{Colors.YELLOW}  ✗ Missing: {', '.join(sys_missing)}{Colors.RESET}")
+
         # Determine installation options
-        all_installed = not pytorch_missing and (not has_jax_file or not jax_missing)
+        all_installed = not pytorch_missing and (not has_jax_file or not jax_missing) and not sys_missing
 
         if all_installed:
             # Everything is installed
@@ -479,9 +514,11 @@ class RLTrainerMenu:
             if has_jax_file:
                 print(f"  {Colors.CYAN}3. Reinstall JAX Packages{Colors.RESET}")
                 print(f"  {Colors.CYAN}4. Reinstall Both PyTorch + JAX{Colors.RESET}")
-                valid_options = ["1", "2", "3", "4"]
+                print(f"  {Colors.CYAN}5. Reinstall System Dependencies (Node/NPM){Colors.RESET}")
+                valid_options = ["1", "2", "3", "4", "5"]
             else:
-                valid_options = ["1", "2"]
+                print(f"  {Colors.CYAN}3. Reinstall System Dependencies (Node/NPM){Colors.RESET}")
+                valid_options = ["1", "2", "3"]
 
             choice = get_user_input(
                 f"\n{Colors.YELLOW}Select option: {Colors.RESET}",
@@ -504,6 +541,13 @@ class RLTrainerMenu:
                     success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file, force_reinstall=True)
                 else:
                     success = False
+            elif (has_jax_file and choice == "5") or (not has_jax_file and choice == "3"):
+                # Install system deps
+                cmd = ["apt-get", "update", "&&", "apt-get", "install", "-y", "nodejs", "npm"]
+                # Need to run as shell command for && to work, or split it. 
+                # run_command_with_progress runs directly, so we should probably run bash -c
+                bash_cmd = ["bash", "-c", "apt-get update && apt-get install -y nodejs npm"]
+                success, _ = run_command_with_progress(bash_cmd, "Installing Node.js and NPM", "system_install.log")
             else:
                 return True
 
@@ -528,13 +572,15 @@ class RLTrainerMenu:
             if has_jax_file:
                 print(f"  {Colors.GREEN}2. Install JAX Requirements Only{Colors.RESET}")
                 print(f"  {Colors.CYAN}3. Install Both PyTorch + JAX{Colors.RESET}")
-                print(f"  {Colors.RED}4. Cancel / Return to Main Menu{Colors.RESET}")
-                valid_options = ["1", "2", "3", "4"]
-                cancel_option = "4"
+                print(f"  {Colors.CYAN}4. Install System Dependencies (Node/NPM){Colors.RESET}")
+                print(f"  {Colors.RED}5. Cancel / Return to Main Menu{Colors.RESET}")
+                valid_options = ["1", "2", "3", "4", "5"]
+                cancel_option = "5"
             else:
-                print(f"  {Colors.RED}2. Cancel / Return to Main Menu{Colors.RESET}")
-                valid_options = ["1", "2"]
-                cancel_option = "2"
+                print(f"  {Colors.CYAN}2. Install System Dependencies (Node/NPM){Colors.RESET}")
+                print(f"  {Colors.RED}3. Cancel / Return to Main Menu{Colors.RESET}")
+                valid_options = ["1", "2", "3"]
+                cancel_option = "3"
 
             choice = get_user_input(
                 f"\n{Colors.YELLOW}Select option: {Colors.RESET}",
@@ -557,13 +603,24 @@ class RLTrainerMenu:
                     success, _ = self._install_requirements_with_numpy_fix(jax_requirements_file)
                 else:
                     success = False
+            elif (has_jax_file and choice == "4") or (not has_jax_file and choice == "2"):
+                # Install system deps
+                print(f"\n{Colors.YELLOW}Note: This requires root/sudo privileges (common in Runpod/Docker).{Colors.RESET}")
+                bash_cmd = ["bash", "-c", "apt-get update && apt-get install -y nodejs npm"]
+                success, _ = run_command_with_progress(bash_cmd, "Installing Node.js and NPM", "system_install.log")
             else:
                 return False
 
         if success:
             print(f"\n{Colors.GREEN}✓ Installation completed successfully!{Colors.RESET}")
             print(f"{Colors.CYAN}All requested dependencies are now installed.{Colors.RESET}")
-            print(f"{Colors.CYAN}You can now use the RL Trading System features.{Colors.RESET}")
+
+            # Restart program to ensure new NumPy/package versions are loaded
+            print(f"\n{Colors.YELLOW}Requirements updated successfully. Restarting program to apply changes...{Colors.RESET}")
+            time.sleep(3)
+
+            # Restart the program with the same arguments
+            os.execv(sys.executable, [sys.executable] + sys.argv)
         else:
             print(f"\n{Colors.RED}✗ Installation failed. Check logs for details.{Colors.RESET}")
             print(f"{Colors.YELLOW}Tip: Try running installation commands manually{Colors.RESET}")
@@ -1347,11 +1404,12 @@ class RLTrainerMenu:
                     print(f"  - {name}")
 
     def run_stress_test(self):
-        """Run hardware stress test and auto-tuning."""
+        """Run hardware stress test and auto-tuning with interactive menu."""
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}║              HARDWARE STRESS TEST & AUTO-TUNE                  ║{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
-        print(f"\n{Colors.YELLOW}This will test your hardware and determine optimal settings.{Colors.RESET}\n")
+
+        print(f"\n{Colors.YELLOW}Test your hardware and find optimal training configurations.{Colors.RESET}\n")
 
         # Check which stress test scripts are available
         jax_stress = self.project_dir / "scripts" / "stress_hardware_jax.py"
@@ -1361,24 +1419,315 @@ class RLTrainerMenu:
             print(f"{Colors.RED}No stress test scripts found in scripts/ directory.{Colors.RESET}")
             return False
 
-        # Prefer autotune version if available
-        script_to_run = autotune_stress if autotune_stress.exists() else jax_stress
-        script_name = script_to_run.name
+        # Build menu options dynamically based on available scripts
+        stress_menu_options = {}
+        option_num = 1
 
-        print(f"{Colors.CYAN}Running: {script_name}{Colors.RESET}\n")
+        if jax_stress.exists():
+            stress_menu_options[str(option_num)] = "JAX Phase 1 Stress Test (Entry Signal Learning) - Recommended"
+            option_num += 1
+            stress_menu_options[str(option_num)] = "JAX Phase 2 Stress Test (Position Management) - Recommended"
+            option_num += 1
+
+        if autotune_stress.exists():
+            stress_menu_options[str(option_num)] = "Legacy PyTorch Phase 3 Autotune (LLM/Hybrid) - Advanced Only"
+            option_num += 1
+
+        if jax_stress.exists():
+            stress_menu_options[str(option_num)] = "Validate Existing Profile"
+            option_num += 1
+
+        stress_menu_options[str(option_num)] = "Back to Main Menu"
+
+        # Display stress test type selection menu
+        print(f"{Colors.BOLD}SELECT STRESS TEST TYPE:{Colors.RESET}")
+        for key, desc in stress_menu_options.items():
+            # Highlight recommended options
+            if "Recommended" in desc:
+                print(f"{Colors.GREEN}  {key}. {desc}{Colors.RESET}")
+            elif "Advanced Only" in desc:
+                print(f"{Colors.YELLOW}  {key}. {desc}{Colors.RESET}")
+            else:
+                print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        choice = get_user_input(
+            f"\nSelect option (1-{len(stress_menu_options)}): ",
+            list(stress_menu_options.keys())
+        )
+
+        if choice is None or stress_menu_options[choice] == "Back to Main Menu":
+            print(f"{Colors.YELLOW}Returning to main menu...{Colors.RESET}")
+            return False
+
+        selected_option = stress_menu_options[choice]
+
+        # Handle JAX Phase 1 or Phase 2 stress test
+        if "JAX Phase" in selected_option:
+            phase = 1 if "Phase 1" in selected_option else 2
+            return self._run_jax_stress_test(jax_stress, phase)
+
+        # Handle Profile Validation
+        elif "Validate Existing Profile" in selected_option:
+            return self._validate_hardware_profile(jax_stress)
+
+        # Handle Legacy PyTorch Phase 3 Autotune
+        elif "Legacy PyTorch" in selected_option:
+            print(f"\n{Colors.YELLOW}Warning: This uses Phase 3 LLM (PyTorch), which requires significant VRAM.{Colors.RESET}")
+            print(f"{Colors.YELLOW}For most users, JAX Phase 1/2 tests are recommended.{Colors.RESET}\n")
+
+            if not prompt_confirm("Continue with Phase 3 autotune?", default_yes=False):
+                return False
+
+            print(f"\n{Colors.CYAN}Running: stress_hardware_autotune.py{Colors.RESET}\n")
+
+            success, _ = run_command_with_progress(
+                [sys.executable, str(autotune_stress)],
+                "Phase 3 Hardware Autotune",
+                "stress_test_phase3.log"
+            )
+
+            if success:
+                print(f"\n{Colors.GREEN}✓ Phase 3 autotune completed!{Colors.RESET}")
+                print(f"{Colors.CYAN}Check logs/stress_test_phase3.log for results.{Colors.RESET}")
+            else:
+                print(f"\n{Colors.RED}✗ Autotune failed. Check logs/stress_test_phase3.log{Colors.RESET}")
+
+            return success
+
+        return False
+
+    def _run_jax_stress_test(self, jax_stress: Path, phase: int) -> bool:
+        """
+        Run JAX stress test for specified phase with user configuration.
+
+        Args:
+            jax_stress: Path to JAX stress test script
+            phase: Training phase (1 or 2)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Select test intensity
+        intensity_options = {
+            "1": "Quick (5 runs, ~10-15 min) - Fast hardware check",
+            "2": "Standard (10 runs, ~20-30 min) - Balanced",
+            "3": "Thorough (20 runs, ~40-60 min) - Complete optimization"
+        }
+
+        print(f"\n{Colors.BOLD}SELECT TEST INTENSITY:{Colors.RESET}")
+        for key, desc in intensity_options.items():
+            print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        intensity_choice = get_user_input(
+            "\nSelect intensity (1-3): ",
+            list(intensity_options.keys())
+        )
+
+        if intensity_choice is None:
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        # Map intensity to max_runs
+        max_runs_map = {"1": 5, "2": 10, "3": 20}
+        max_runs = max_runs_map[intensity_choice]
+
+        # Select data type
+        data_options = {
+            "1": "Dummy Data (fast, hardware testing only)",
+            "2": "Real Market Data (slower, includes quality validation) - Recommended"
+        }
+
+        print(f"\n{Colors.BOLD}SELECT DATA TYPE:{Colors.RESET}")
+        for key, desc in data_options.items():
+            if "Recommended" in desc:
+                print(f"{Colors.GREEN}  {key}. {desc}{Colors.RESET}")
+            else:
+                print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        data_choice = get_user_input(
+            "\nSelect data type (1-2): ",
+            list(data_options.keys())
+        )
+
+        if data_choice is None:
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        use_real_data = (data_choice == "2")
+
+        # Select market
+        market = "TEST"  # Default for dummy data
+        if use_real_data:
+            market = detect_and_select_market(self.project_dir)
+            if not market:
+                print(f"{Colors.YELLOW}No market selected. Using dummy data instead.{Colors.RESET}")
+                use_real_data = False
+                market = "TEST"
+
+        # Display configuration summary
+        phase_name = "Entry Signal Learning" if phase == 1 else "Position Management"
+        time_estimate = {
+            "1": "10-15 minutes",
+            "2": "20-30 minutes",
+            "3": "40-60 minutes"
+        }[intensity_choice]
+
+        print(f"\n{Colors.BOLD}TEST CONFIGURATION:{Colors.RESET}")
+        print(f"{Colors.CYAN}  Phase: {phase} ({phase_name}){Colors.RESET}")
+        print(f"{Colors.CYAN}  Market: {market}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Max Runs: {max_runs}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Data: {'Real market data' if use_real_data else 'Dummy data'}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Estimated Time: {time_estimate}{Colors.RESET}\n")
+
+        # Confirm before running
+        if not prompt_confirm(f"Start JAX Phase {phase} stress test?", default_yes=True):
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        # Build command
+        command = [
+            sys.executable,
+            str(jax_stress),
+            "--phase", str(phase),
+            "--market", market,
+            "--max-runs", str(max_runs),
+            "--patience", "3",
+            "--min-gain", "0.5"
+        ]
+
+        if use_real_data:
+            command.append("--use-real-data")
+
+        # Run the stress test
+        print(f"\n{Colors.CYAN}Running JAX Phase {phase} Stress Test...{Colors.RESET}\n")
 
         success, _ = run_command_with_progress(
-            [sys.executable, str(script_to_run)],
-            "Hardware Stress Test",
-            "stress_test.log"
+            command,
+            f"JAX Phase {phase} Stress Test",
+            f"stress_test_jax_phase{phase}.log"
         )
 
         if success:
-            print(f"\n{Colors.GREEN}✓ Stress test completed! Check logs/stress_test.log for results.{Colors.RESET}")
+            self._display_stress_test_results(phase)
         else:
-            print(f"\n{Colors.RED}✗ Stress test failed. Check logs/stress_test.log{Colors.RESET}")
+            print(f"\n{Colors.RED}✗ Stress test failed.{Colors.RESET}")
+            print(f"{Colors.CYAN}Check logs/stress_test_jax_phase{phase}.log for details.{Colors.RESET}")
 
         return success
+
+    def _validate_hardware_profile(self, jax_stress: Path) -> bool:
+        """
+        Validate an existing hardware profile.
+
+        Args:
+            jax_stress: Path to JAX stress test script
+
+        Returns:
+            True if successful, False otherwise
+        """
+        profiles_dir = self.project_dir / "config" / "hardware_profiles"
+
+        if not profiles_dir.exists():
+            print(f"\n{Colors.RED}Hardware profiles directory not found: {profiles_dir}{Colors.RESET}")
+            print(f"{Colors.YELLOW}Run a stress test first to generate profiles.{Colors.RESET}")
+            return False
+
+        # List available profiles
+        profile_files = list(profiles_dir.glob("*.yaml"))
+
+        if not profile_files:
+            print(f"\n{Colors.RED}No hardware profiles found in {profiles_dir}{Colors.RESET}")
+            print(f"{Colors.YELLOW}Run a stress test first to generate profiles.{Colors.RESET}")
+            return False
+
+        print(f"\n{Colors.BOLD}AVAILABLE HARDWARE PROFILES:{Colors.RESET}")
+        profiles_map = {}
+        for idx, profile_file in enumerate(profile_files, 1):
+            profiles_map[str(idx)] = profile_file
+            print(f"{Colors.CYAN}  {idx}. {profile_file.name}{Colors.RESET}")
+
+        profiles_map[str(len(profile_files) + 1)] = None  # Cancel option
+        print(f"{Colors.CYAN}  {len(profile_files) + 1}. Cancel{Colors.RESET}")
+
+        choice = get_user_input(
+            f"\nSelect profile to validate (1-{len(profiles_map)}): ",
+            list(profiles_map.keys())
+        )
+
+        if choice is None or profiles_map[choice] is None:
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        selected_profile = profiles_map[choice]
+
+        print(f"\n{Colors.CYAN}Validating profile: {selected_profile.name}{Colors.RESET}\n")
+
+        command = [
+            sys.executable,
+            str(jax_stress),
+            "--validate-profile", str(selected_profile)
+        ]
+
+        success, _ = run_command_with_progress(
+            command,
+            "Profile Validation",
+            "profile_validation.log"
+        )
+
+        if success:
+            print(f"\n{Colors.GREEN}✓ Profile validation completed!{Colors.RESET}")
+            print(f"{Colors.CYAN}Check logs/profile_validation.log for details.{Colors.RESET}")
+        else:
+            print(f"\n{Colors.RED}✗ Profile validation failed.{Colors.RESET}")
+            print(f"{Colors.CYAN}Check logs/profile_validation.log for details.{Colors.RESET}")
+
+        return success
+
+    def _display_stress_test_results(self, phase: int):
+        """
+        Display stress test results and next steps.
+
+        Args:
+            phase: Training phase that was tested
+        """
+        print(f"\n{Colors.GREEN}✓ Stress test completed!{Colors.RESET}\n")
+
+        profiles_dir = self.project_dir / "config" / "hardware_profiles"
+        results_dir = self.project_dir / "results"
+
+        # Show generated profiles
+        if profiles_dir.exists():
+            profile_files = list(profiles_dir.glob("*.yaml"))
+            if profile_files:
+                print(f"{Colors.BOLD}PROFILES SAVED TO:{Colors.RESET}")
+                print(f"{Colors.CYAN}  {profiles_dir}/{Colors.RESET}")
+                for profile_file in profile_files:
+                    print(f"{Colors.GREEN}    - {profile_file.name}{Colors.RESET}")
+                print()
+
+        # Show CSV log if available
+        if results_dir.exists():
+            csv_files = sorted(results_dir.glob("jax_stress_test_*.csv"))
+            if csv_files:
+                latest_csv = csv_files[-1]
+                print(f"{Colors.BOLD}DETAILED LOG:{Colors.RESET}")
+                print(f"{Colors.CYAN}  {latest_csv}{Colors.RESET}\n")
+
+        # Show usage instructions
+        print(f"{Colors.BOLD}TO USE THE BEST PROFILE IN TRAINING:{Colors.RESET}")
+
+        if phase == 1:
+            print(f"{Colors.YELLOW}  python src/jax_migration/train_ppo_jax_fixed.py \\{Colors.RESET}")
+            print(f"{Colors.YELLOW}    --profile config/hardware_profiles/balanced.yaml{Colors.RESET}")
+        else:
+            print(f"{Colors.YELLOW}  python src/jax_migration/train_phase2_jax.py \\{Colors.RESET}")
+            print(f"{Colors.YELLOW}    --profile config/hardware_profiles/balanced.yaml{Colors.RESET}")
+
+        print()
+        print(f"{Colors.CYAN}Tip: Use 'balanced.yaml' for general training, 'max_gpu.yaml' for speed,{Colors.RESET}")
+        print(f"{Colors.CYAN}     or 'max_quality.yaml' for best results (slower).{Colors.RESET}\n")
+
+        input(f"{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
 
     def run_hybrid_test(self):
         """Run hardware-maximized hybrid LLM/GPU validation test."""
@@ -1886,9 +2235,25 @@ class RLTrainerMenu:
                 print(f"\n\n{Colors.YELLOW}Exiting RL TRAINER...{Colors.RESET}")
                 break
             except Exception as e:
-                print(f"\n{Colors.RED}An error occurred: {str(e)}{Colors.RESET}")
-                self.logger.error(f"Menu error: {str(e)}")
-                input(f"{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
+                error_str = str(e).lower()
+
+                # Check for NumPy version conflict errors
+                if any(keyword in error_str for keyword in ['numpy', 'ufunc', '__qualname__', 'ndarray']):
+                    print(f"\n{Colors.RED}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+                    print(f"{Colors.RED}║          NumPy Version Conflict Detected                      ║{Colors.RESET}")
+                    print(f"{Colors.RED}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+                    print(f"\n{Colors.YELLOW}This occurs when packages are installed while the program is running.{Colors.RESET}")
+                    print(f"{Colors.YELLOW}The program needs to restart to load the new NumPy version.{Colors.RESET}")
+                    print(f"\n{Colors.CYAN}Please restart the program:{Colors.RESET}")
+                    print(f"{Colors.GREEN}  python main.py{Colors.RESET}")
+                    print(f"\n{Colors.YELLOW}Press Enter to exit...{Colors.RESET}")
+                    input()
+                    sys.exit(0)
+                else:
+                    # Generic error handling
+                    print(f"\n{Colors.RED}An error occurred: {str(e)}{Colors.RESET}")
+                    self.logger.error(f"Menu error: {str(e)}")
+                    input(f"{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
 
 
 def main():

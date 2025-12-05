@@ -26,6 +26,7 @@ import psutil
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,6 +49,13 @@ from llm_features import LLMFeatureBuilder
 from model_utils import detect_available_markets
 from market_specs import get_market_spec
 from action_mask_utils import get_action_masks
+
+# Silence noisy deprecation warnings during test runs
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*env.action_masks to get variables from other wrappers is deprecated.*",
+)
 
 
 @dataclass
@@ -217,6 +225,32 @@ class HardwareMonitor:
         
         gpu_memory_used = [m.gpu_memory_used for m in self.metrics_history]
         return max(gpu_memory_used) if gpu_memory_used else 0.0
+
+    def get_summary(self) -> Dict[str, float]:
+        """Return aggregate hardware metrics for the run."""
+        history = self.metrics_history
+        if not history:
+            return {
+                "avg_gpu_utilization": 0.0,
+                "avg_cpu_percent": 0.0,
+                "avg_memory_percent": 0.0,
+                "peak_gpu_memory_gb": 0.0,
+                "peak_system_memory_gb": 0.0,
+            }
+
+        gpu_utils = [m.gpu_utilization for m in history]
+        cpu_percents = [m.cpu_percent for m in history]
+        mem_percents = [m.memory_percent for m in history]
+        gpu_mems = [m.gpu_memory_used for m in history]
+        sys_mems = [m.memory_used_gb for m in history]
+
+        return {
+            "avg_gpu_utilization": float(np.mean(gpu_utils)),
+            "avg_cpu_percent": float(np.mean(cpu_percents)),
+            "avg_memory_percent": float(np.mean(mem_percents)),
+            "peak_gpu_memory_gb": float(max(gpu_mems) if gpu_mems else 0.0),
+            "peak_system_memory_gb": float(max(sys_mems) if sys_mems else 0.0),
+        }
     
     def save_metrics(self, filepath: str):
         """Save metrics history to file."""
@@ -403,7 +437,7 @@ class BatchedCallback(BaseCallback):
         self.log_interval = log_interval
         self.step_count = 0
         self.batch_logs = []
-        self.logger = logging.getLogger(__name__)
+        self.py_logger = logging.getLogger(__name__)
     
     def _on_step(self) -> bool:
         """Called on each environment step."""
@@ -440,7 +474,7 @@ class BatchedCallback(BaseCallback):
         action_distribution = np.bincount(actions, minlength=6)
         
         # Log batch summary
-        self.logger.info(
+        self.py_logger.info(
             f"Steps {steps[0]}-{steps[-1]}: Avg Reward={avg_reward:.4f} (±{reward_std:.4f}), "
             f"Actions: {action_distribution}"
         )
@@ -618,12 +652,23 @@ class TestingFramework:
             
             # Log results
             self._log_test_results()
-            
+
         finally:
             # Stop monitoring and save metrics
             self.hardware_monitor.stop_monitoring()
             metrics_file = f"logs/hardware_metrics_{self.config.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             self.hardware_monitor.save_metrics(metrics_file)
+            self.logger.info("Hardware metrics saved: %s", metrics_file)
+
+        run_duration = time.time() - self.start_time
+        summary = self.hardware_monitor.get_summary()
+        summary["duration_seconds"] = run_duration
+        summary["mode"] = self.config.mode
+        summary["vectorized_envs"] = self.config.vectorized_envs
+        summary["batch_size"] = self.config.batch_size
+        summary["timesteps_reduction"] = self.config.timesteps_reduction
+        summary["device"] = self.config.device
+        return summary
     
     def run_automated_pipeline(self):
         """
@@ -684,15 +729,24 @@ class TestingFramework:
         )
         
         # Create vectorized environments
-        def make_env(rank):
+        # Avoid closing over self to keep SubprocVecEnv pickle-safe
+        seed_base = self.config.seed
+        def make_env(rank, env_kwargs=env_kwargs, seed_base=seed_base):
             def _init():
                 env = TradingEnvironmentPhase3LLM(**env_kwargs)
-                env.reset(seed=self.config.seed + rank if self.config.seed is not None else None)
+                env.reset(seed=seed_base + rank if seed_base is not None else None)
                 return Monitor(env)
             return _init
         
-        # Use SubprocVecEnv for true parallelism
-        envs = SubprocVecEnv([make_env(i) for i in range(self.config.vectorized_envs)])
+        # Prefer SubprocVecEnv (explicit fork to avoid <stdin> spawn issues); fall back to DummyVecEnv if it still fails
+        try:
+            envs = SubprocVecEnv(
+                [make_env(i) for i in range(self.config.vectorized_envs)],
+                start_method="fork"
+            )
+        except Exception as exc:
+            self.logger.warning("SubprocVecEnv failed (%s); falling back to DummyVecEnv", exc)
+            envs = DummyVecEnv([make_env(i) for i in range(self.config.vectorized_envs)])
         
         # Create evaluation environment
         eval_env = TradingEnvironmentPhase3LLM(**env_kwargs)
@@ -710,7 +764,9 @@ class TestingFramework:
         if not data_file.exists():
             raise FileNotFoundError(f"Market data not found: {data_file}")
         
-        data = pd.read_csv(data_file)
+        data = pd.read_csv(data_file, parse_dates=['datetime'])
+        data.set_index('datetime', inplace=True)
+        data.sort_index(inplace=True)
         
         # For testing, use subset of data to reduce processing time
         if self.config.mode == "hardware_maximized":
@@ -748,8 +804,6 @@ class TestingFramework:
             ent_coef=self.config.ent_coef,
             vf_coef=self.config.vf_coef,
             max_grad_norm=self.config.max_grad_norm,
-            use_sde=self.config.use_sde,
-            sde_sample_freq=self.config.sde_sample_freq,
             target_kl=self.config.target_kl,
             policy_kwargs=policy_kwargs,
             verbose=self.config.verbose,
@@ -841,12 +895,10 @@ class TestingFramework:
             steps = 0
             
             while not done and steps < 1000:
-                if hasattr(model, 'predict'):
-                    # RL model
-                    action, _ = model.predict(obs, deterministic=True)
+                if hasattr(model, 'rl_model') and getattr(model, 'rl_model', None) is not None:
+                    action, _ = model.rl_model.predict(obs, deterministic=True)
                 else:
-                    # Hybrid agent
-                    action, _ = model.predict(obs, action_mask=get_action_masks(eval_env))
+                    action, _ = model.predict(obs, deterministic=True)
                 
                 obs, reward, terminated, truncated, info = eval_env.step(action)
                 episode_reward += reward

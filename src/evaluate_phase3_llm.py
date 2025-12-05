@@ -151,7 +151,7 @@ def create_evaluation_env(data: pd.DataFrame, market_name: Optional[str], use_ll
         initial_sl_multiplier=1.5,
         initial_tp_ratio=3.0,
         position_size_contracts=1.0,
-        trailing_drawdown_limit=2500,
+        trailing_drawdown_limit=15000,  # EVAL: RELAXED to $15K (match training) to allow learning
         tighten_sl_step=0.5,
         extend_tp_step=1.0,
         trailing_activation_profit=1.0

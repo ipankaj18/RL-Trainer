@@ -156,15 +156,11 @@ class LLMReasoningModule:
             configured_path = self.config['llm_model'].get('local_path', 'Phi-3-mini-4k-instruct')
             local_path = Path(configured_path)
 
-            # Check if path is absolute or relative to project root
+            # Universal project-root resolution (works in local, RunPod, any cwd)
             if not local_path.is_absolute():
-                # Try relative to current working directory first
-                local_path = Path.cwd() / local_path
-
-            if not local_path.exists():
-                # Try relative to script location
-                script_dir = Path(__file__).parent.parent
-                local_path = script_dir / configured_path
+                # Always resolve relative to project root (src/llm_reasoning.py -> src/ -> project/)
+                project_root = Path(__file__).parent.parent
+                local_path = project_root / configured_path
 
             # Auto-download if missing
             model_name = self.config['llm_model']['name']

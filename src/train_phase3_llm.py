@@ -334,6 +334,56 @@ PHASE3_CONFIG = {
 }
 
 
+def load_hardware_profile(profile_path: Optional[str]) -> dict:
+    """Load a saved hardware profile with env/batch/timestep overrides."""
+    if not profile_path:
+        return {}
+
+    try:
+        path = Path(profile_path)
+        if not path.exists():
+            safe_print(f"[HARDWARE] Profile not found: {profile_path}")
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        safe_print(f"[HARDWARE] Loaded hardware profile: {path.name}")
+        return data
+    except Exception as exc:
+        safe_print(f"[HARDWARE] Failed to load profile {profile_path}: {exc}")
+        return {}
+
+
+def apply_hardware_profile(config: dict, profile: dict, test_mode: bool) -> None:
+    """Apply hardware profile overrides onto the Phase 3 config."""
+    if not profile:
+        return
+
+    if "vectorized_envs" in profile:
+        config["n_envs"] = max(1, int(profile["vectorized_envs"]))
+        safe_print(f"[HARDWARE] n_envs set from profile: {config['n_envs']}")
+
+    if "batch_size" in profile:
+        config["batch_size"] = max(1, int(profile["batch_size"]))
+        safe_print(f"[HARDWARE] batch_size set from profile: {config['batch_size']}")
+
+    if "device" in profile and isinstance(profile["device"], str):
+        config["device"] = profile["device"]
+        safe_print(f"[HARDWARE] device set from profile: {config['device']}")
+
+    reduction = profile.get("timesteps_reduction")
+    if reduction:
+        try:
+            reduction_f = float(reduction)
+            if reduction_f > 0:
+                base = config.get("total_timesteps", PHASE3_CONFIG["total_timesteps"])
+                new_total = max(1, int(base * reduction_f))
+                config["total_timesteps"] = new_total
+                mode_label = "test" if test_mode else "production"
+                safe_print(f"[HARDWARE] total_timesteps ({mode_label}) scaled by {reduction_f:.2f} → {new_total:,}")
+        except (TypeError, ValueError):
+            safe_print(f"[HARDWARE] Ignoring invalid timesteps_reduction value: {reduction}")
+
+
 def normalize_device(device):
     """Convert SB3 device strings/objects into torch.device."""
     if device is None:
@@ -1149,6 +1199,7 @@ def train_phase3(
     n_envs: Optional[int] = None,
     vec_env_cls: Optional[str] = None,
     timesteps: Optional[int] = None,
+    hardware_profile: Optional[str] = None,
 ):
     """
     Main Phase 3 training function.
@@ -1159,6 +1210,7 @@ def train_phase3(
         continue_training: If True, continue from existing model
         model_path: Path to model to continue from
         timesteps: Override total timesteps (useful for quick smoke tests)
+        hardware_profile: Path to hardware profile yaml to override env/batch/timesteps
     """
     safe_print("=" * 70)
     safe_print("Phase 3: Hybrid RL + LLM Trading Agent Training")
@@ -1172,6 +1224,10 @@ def train_phase3(
         config['save_freq'] = 5000
         config['n_envs'] = 20  # OPTIMIZED: Use 20 envs for better performance (was 2)
         safe_print("[CONFIG] Test mode enabled - optimized settings (20 parallel envs)")
+
+    # Apply hardware profile (overrides test-mode defaults when provided)
+    profile = load_hardware_profile(hardware_profile)
+    apply_hardware_profile(config, profile, test_mode=test_mode)
 
     if timesteps is not None:
         config['total_timesteps'] = max(1, int(timesteps))
@@ -1595,6 +1651,7 @@ def main():
     parser.add_argument('--n-envs', type=int, help='Override number of parallel environments')
     parser.add_argument('--vec-env', choices=['dummy', 'subproc'], help='Select vectorized env type')
     parser.add_argument('--timesteps', type=int, help='Override total timesteps for the run')
+    parser.add_argument('--hardware-profile', type=str, help='Path to hardware profile yaml to apply')
 
     args = parser.parse_args()
     
@@ -1607,6 +1664,7 @@ def main():
         n_envs=args.n_envs,
         vec_env_cls=args.vec_env,
         timesteps=args.timesteps,
+        hardware_profile=args.hardware_profile,
     )
     
     if model is None:

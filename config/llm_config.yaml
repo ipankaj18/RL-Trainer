@@ -14,7 +14,7 @@
 # LLM Model Selection (Not used in current PURE RL mode)
 llm_model:
   name: "microsoft/Phi-3-mini-4k-instruct"  # 3.8B parameters, ~4GB VRAM with INT8
-  local_path: "Base_Model"  # Fixed path to manually downloaded model
+  local_path: "Phi-3-mini-4k-instruct"  # Fixed path to manually downloaded model
   quantization: "int8"  # Options: int8, int4, none
   device: "auto"  # Options: auto, cuda, cpu
   max_new_tokens: 40  # Shorter responses for latency and decisiveness

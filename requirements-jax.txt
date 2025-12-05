@@ -1,0 +1,18 @@
+# JAX Support - Optional Dependencies for JAX-based Training
+# Installation: pip install -r requirements-jax.txt
+
+# JAX with CUDA 12 support
+jax[cuda12]>=0.4.20
+
+# Neural network library for JAX
+flax>=0.7.0
+
+# Gradient processing and optimization library for JAX
+optax>=0.1.7
+
+# Testing and debugging utilities for JAX
+chex>=0.1.82
+
+# Dashboard Dependencies
+fastapi>=0.100.0
+uvicorn>=0.20.0

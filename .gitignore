@@ -34,6 +34,7 @@ ENV/
 env.bak/
 venv.bak/
 .venv/
+.venv-jax-gpu/
 
 # PyCharm
 .idea/
@@ -76,6 +77,7 @@ models/*
 *.pth
 *.ckpt
 *.pb
+test_phase2_jax_eval_ckpt/
 
 # Data files (large CSV/binary files)
 data/*
@@ -225,6 +227,7 @@ docs/x_posts.md
 # Production folders and files
 .kilocode/
 .claude/
+.agent/
 AGENTS.md
 Claude.md
 

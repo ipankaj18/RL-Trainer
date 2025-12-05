@@ -1,0 +1,18 @@
+mode: jax_hardware_maximized
+phase: 1
+num_envs: 256
+tested_num_envs: 256
+stress_test_updates: 200
+safety_margin_applied: 1.0
+num_steps: 128
+num_minibatches: 4
+num_epochs: 4
+device: gpu
+expected_sps: 16162871.033207403
+expected_gpu_util: 44.3
+expected_memory_gb: 15.25067138671875
+quality_score: 0.0
+mean_return: 0.0
+entropy: 0.0
+notes: Auto-tuned via stress_test_simple.py on 2025-12-04
+final_score: 102.96435516603702

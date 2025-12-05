@@ -1412,10 +1412,11 @@ class RLTrainerMenu:
         print(f"\n{Colors.YELLOW}Test your hardware and find optimal training configurations.{Colors.RESET}\n")
 
         # Check which stress test scripts are available
+        simple_stress = self.project_dir / "scripts" / "stress_test_simple.py"
         jax_stress = self.project_dir / "scripts" / "stress_hardware_jax.py"
-        autotune_stress = self.project_dir / "scripts" / "stress_hardware_autotune.py"
+        pytorch_phase3_stress = self.project_dir / "scripts" / "stress_hardware_pytorch_phase3.py"
 
-        if not jax_stress.exists() and not autotune_stress.exists():
+        if not simple_stress.exists() and not jax_stress.exists() and not pytorch_phase3_stress.exists():
             print(f"{Colors.RED}No stress test scripts found in scripts/ directory.{Colors.RESET}")
             return False
 
@@ -1423,17 +1424,23 @@ class RLTrainerMenu:
         stress_menu_options = {}
         option_num = 1
 
-        if jax_stress.exists():
-            stress_menu_options[str(option_num)] = "JAX Phase 1 Stress Test (Entry Signal Learning) - Recommended"
-            option_num += 1
-            stress_menu_options[str(option_num)] = "JAX Phase 2 Stress Test (Position Management) - Recommended"
+        # NEW: Simple self-contained stress test (RECOMMENDED)
+        if simple_stress.exists():
+            stress_menu_options[str(option_num)] = "Simple JAX Stress Test (Self-Contained, No Errors) - ⭐ RECOMMENDED"
             option_num += 1
 
-        if autotune_stress.exists():
+        # OLD: Complex stress test (kept for reference, but has TracerIntegerConversionError issues)
+        if jax_stress.exists():
+            stress_menu_options[str(option_num)] = "Legacy JAX Phase 1 Stress Test (BROKEN - TracerErrors) - Not Recommended"
+            option_num += 1
+            stress_menu_options[str(option_num)] = "Legacy JAX Phase 2 Stress Test (BROKEN - TracerErrors) - Not Recommended"
+            option_num += 1
+
+        if pytorch_phase3_stress.exists():
             stress_menu_options[str(option_num)] = "Legacy PyTorch Phase 3 Autotune (LLM/Hybrid) - Advanced Only"
             option_num += 1
 
-        if jax_stress.exists():
+        if jax_stress.exists() or simple_stress.exists():
             stress_menu_options[str(option_num)] = "Validate Existing Profile"
             option_num += 1
 
@@ -1443,8 +1450,10 @@ class RLTrainerMenu:
         print(f"{Colors.BOLD}SELECT STRESS TEST TYPE:{Colors.RESET}")
         for key, desc in stress_menu_options.items():
             # Highlight recommended options
-            if "Recommended" in desc:
-                print(f"{Colors.GREEN}  {key}. {desc}{Colors.RESET}")
+            if "⭐ RECOMMENDED" in desc:
+                print(f"{Colors.BOLD}{Colors.GREEN}  {key}. {desc}{Colors.RESET}")
+            elif "Not Recommended" in desc or "BROKEN" in desc:
+                print(f"{Colors.RED}  {key}. {desc}{Colors.RESET}")
             elif "Advanced Only" in desc:
                 print(f"{Colors.YELLOW}  {key}. {desc}{Colors.RESET}")
             else:
@@ -1461,27 +1470,39 @@ class RLTrainerMenu:
 
         selected_option = stress_menu_options[choice]
 
-        # Handle JAX Phase 1 or Phase 2 stress test
-        if "JAX Phase" in selected_option:
+        # Handle NEW Simple Stress Test (RECOMMENDED)
+        if "Simple JAX Stress Test" in selected_option:
+            return self._run_simple_stress_test(simple_stress)
+
+        # Handle OLD JAX Phase 1 or Phase 2 stress test (BROKEN)
+        elif "Legacy JAX Phase" in selected_option:
+            print(f"\n{Colors.RED}⚠️  WARNING: This stress test has known TracerIntegerConversionError issues!{Colors.RESET}")
+            print(f"{Colors.YELLOW}It is kept for reference only. Use 'Simple JAX Stress Test' instead.{Colors.RESET}\n")
+            
+            if not prompt_confirm("Continue anyway (not recommended)?", default_yes=False):
+                return False
+            
             phase = 1 if "Phase 1" in selected_option else 2
             return self._run_jax_stress_test(jax_stress, phase)
 
         # Handle Profile Validation
         elif "Validate Existing Profile" in selected_option:
-            return self._validate_hardware_profile(jax_stress)
+            # Use simple stress test if available, otherwise fall back to old one
+            profile_script = simple_stress if simple_stress.exists() else jax_stress
+            return self._validate_hardware_profile(profile_script)
 
         # Handle Legacy PyTorch Phase 3 Autotune
         elif "Legacy PyTorch" in selected_option:
             print(f"\n{Colors.YELLOW}Warning: This uses Phase 3 LLM (PyTorch), which requires significant VRAM.{Colors.RESET}")
-            print(f"{Colors.YELLOW}For most users, JAX Phase 1/2 tests are recommended.{Colors.RESET}\n")
+            print(f"{Colors.YELLOW}For most users, Simple JAX Stress Test is recommended.{Colors.RESET}\n")
 
             if not prompt_confirm("Continue with Phase 3 autotune?", default_yes=False):
                 return False
 
-            print(f"\n{Colors.CYAN}Running: stress_hardware_autotune.py{Colors.RESET}\n")
+            print(f"\n{Colors.CYAN}Running: stress_hardware_pytorch_phase3.py{Colors.RESET}\n")
 
             success, _ = run_command_with_progress(
-                [sys.executable, str(autotune_stress)],
+                [sys.executable, str(pytorch_phase3_stress)],
                 "Phase 3 Hardware Autotune",
                 "stress_test_phase3.log"
             )
@@ -1495,6 +1516,128 @@ class RLTrainerMenu:
             return success
 
         return False
+
+    def _run_simple_stress_test(self, simple_stress: Path) -> bool:
+        """
+        Run the new simple self-contained JAX stress test.
+        
+        Args:
+            simple_stress: Path to stress_test_simple.py script
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        # Select test intensity
+        intensity_options = {
+            "1": "Quick (10 updates, ~2-3 min) - Fast hardware check",
+            "2": "Standard (100 updates, ~10-15 min) - Balanced",
+            "3": "Thorough (200 updates, ~20-30 min) - Complete optimization"
+        }
+
+        print(f"\n{Colors.BOLD}SELECT TEST INTENSITY:{Colors.RESET}")
+        for key, desc in intensity_options.items():
+            print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        intensity_choice = get_user_input(
+            "\nSelect intensity (1-3): ",
+            list(intensity_options.keys())
+        )
+
+        if intensity_choice is None:
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        # Map intensity to num_updates
+        updates_map = {"1": 10, "2": 100, "3": 200}
+        num_updates = updates_map[intensity_choice]
+
+        # Select max runs (how many different num_envs configs to test)
+        runs_options = {
+            "1": "Single config (fastest)",
+            "2": "3 configs (recommended)",
+            "3": "All configs (thorough)"
+        }
+
+        print(f"\n{Colors.BOLD}SELECT NUMBER OF CONFIGURATIONS TO TEST:{Colors.RESET}")
+        for key, desc in runs_options.items():
+            if "recommended" in desc:
+                print(f"{Colors.GREEN}  {key}. {desc}{Colors.RESET}")
+            else:
+                print(f"{Colors.CYAN}  {key}. {desc}{Colors.RESET}")
+
+        runs_choice = get_user_input(
+            "\nSelect option (1-3): ",
+            list(runs_options.keys())
+        )
+
+        if runs_choice is None:
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        # Map runs choice to max_runs
+        max_runs_map = {"1": 1, "2": 3, "3": None}  # None = all configs
+        max_runs = max_runs_map[runs_choice]
+
+        # Display configuration summary
+        time_estimate = {
+            "1": "2-5 minutes",
+            "2": "10-20 minutes",
+            "3": "20-40 minutes"
+        }[intensity_choice]
+
+        print(f"\n{Colors.BOLD}TEST CONFIGURATION:{Colors.RESET}")
+        print(f"{Colors.CYAN}  Updates per config: {num_updates}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Configurations to test: {max_runs if max_runs else 'All available'}{Colors.RESET}")
+        print(f"{Colors.CYAN}  Estimated Time: {time_estimate}{Colors.RESET}\n")
+
+        # Confirm before running
+        if not prompt_confirm("Start simple JAX stress test?", default_yes=True):
+            print(f"{Colors.YELLOW}Cancelled.{Colors.RESET}")
+            return False
+
+        # Build command
+        command = [
+            sys.executable,
+            str(simple_stress),
+            "--num-updates", str(num_updates)
+        ]
+
+        if max_runs:
+            command.extend(["--max-runs", str(max_runs)])
+
+        # Run the stress test
+        print(f"\n{Colors.CYAN}Running Simple JAX Stress Test...{Colors.RESET}\n")
+
+        success, _ = run_command_with_progress(
+            command,
+            "Simple JAX Stress Test",
+            "stress_test_simple.log"
+        )
+
+        if success:
+            print(f"\n{Colors.GREEN}✓ Stress test completed!{Colors.RESET}\n")
+            
+            # Show generated profiles
+            profiles_dir = self.project_dir / "config" / "hardware_profiles"
+            if profiles_dir.exists():
+                profile_files = list(profiles_dir.glob("*.yaml"))
+                if profile_files:
+                    print(f"{Colors.BOLD}PROFILES SAVED TO:{Colors.RESET}")
+                    print(f"{Colors.CYAN}  {profiles_dir}/{Colors.RESET}")
+                    for profile_file in profile_files:
+                        print(f"{Colors.GREEN}    - {profile_file.name}{Colors.RESET}")
+                    print()
+            
+            print(f"{Colors.BOLD}TO USE A PROFILE IN TRAINING:{Colors.RESET}")
+            print(f"{Colors.YELLOW}  main.py will automatically ask if you want to load a profile{Colors.RESET}")
+            print(f"{Colors.YELLOW}  Profiles are in: config/hardware_profiles/{Colors.RESET}\n")
+            
+            input(f"{Colors.YELLOW}Press Enter to continue...{Colors.RESET}")
+        else:
+            print(f"\n{Colors.RED}✗ Stress test failed.{Colors.RESET}")
+            print(f"{Colors.CYAN}Check logs/stress_test_simple.log for details.{Colors.RESET}")
+
+        return success
 
     def _run_jax_stress_test(self, jax_stress: Path, phase: int) -> bool:
         """

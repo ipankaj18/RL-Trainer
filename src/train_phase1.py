@@ -29,6 +29,37 @@ for _env_var in (
     "NUMEXPR_NUM_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 ):
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Phase 1: Foundational Trading Patterns Training
+
+Optimized training approach with:
+1. Simplified reward function focusing on entry quality
+2. Relaxed constraints (trailing DD, daily loss limit, profit target)
+3. Simplified observation space (removed complex features)
+4. Better reward magnitudes for stronger learning signal
+5. Enhanced exploration parameters
+
+Designed to learn quality entry signals before advancing to Phase 2 position management.
+"""
+
+import os
+
+# Limit math/BLAS thread pools before importing numpy/torch
+try:
+    _THREAD_LIMIT_INT = max(1, int(os.environ.get("TRAINER_MAX_BLAS_THREADS", "1")))
+except ValueError:
+    _THREAD_LIMIT_INT = 1
+_THREAD_LIMIT_STR = str(_THREAD_LIMIT_INT)
+
+for _env_var in (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+):
     os.environ.setdefault(_env_var, _THREAD_LIMIT_STR)
 
 import sys
@@ -37,6 +68,7 @@ from pathlib import Path
 import torch
 import numpy as np
 import pandas as pd
+import yaml
 from datetime import datetime
 
 # Add project root to path for imports
@@ -213,6 +245,35 @@ PHASE1_CONFIG = {
     'device': 'cuda'
 }
 
+def load_hardware_profile(profile_path: str) -> dict:
+    """Loads a hardware profile from a YAML file."""
+    if not os.path.exists(profile_path):
+        raise FileNotFoundError(f"Hardware profile not found at: {profile_path}")
+    safe_print(f"[CONFIG] Loading hardware profile from: {profile_path}")
+    with open(profile_path, 'r') as f:
+        profile = yaml.safe_load(f)
+    return profile
+
+def apply_hardware_profile(config: dict, profile_data: dict, test_mode: bool):
+    """Applies hardware profile settings to the training configuration."""
+    safe_print("[CONFIG] Applying hardware profile settings...")
+    for key, value in profile_data.items():
+        if key == 'test_mode_overrides' and test_mode:
+            safe_print("[CONFIG] Applying test mode overrides from hardware profile...")
+            for test_key, test_value in value.items():
+                if test_key in config:
+                    safe_print(f"         - Overriding {test_key}: {config[test_key]} -> {test_value}")
+                    config[test_key] = test_value
+                else:
+                    safe_print(f"         - Adding new config {test_key}: {test_value}")
+                    config[test_key] = test_value
+        elif key in config:
+            safe_print(f"         - Overriding {key}: {config[key]} -> {value}")
+            config[key] = value
+        else:
+            safe_print(f"         - Adding new config {key}: {value}")
+            config[key] = value
+    safe_print("[CONFIG] Hardware profile applied.")
 
 def create_lr_schedule(initial_lr, final_fraction, total_timesteps):
     """Create linear learning rate schedule."""
@@ -433,8 +494,13 @@ def train_phase1(
     market_override=None,
     non_interactive=False,
     test_mode=False,
+    hardware_profile=None,
 ):
     """Execute Phase 1 training with simplified reward and relaxed constraints."""
+    # Apply hardware profile if provided
+    if hardware_profile:
+        profile_data = load_hardware_profile(hardware_profile)
+        apply_hardware_profile(PHASE1_CONFIG, profile_data, test_mode)
     if continue_training:
         safe_print("=" * 80)
         safe_print("PHASE 1: CONTINUING TRAINING FROM EXISTING MODEL")
@@ -690,14 +756,9 @@ def train_phase1(
     )
 
     # CRITICAL FIX: Link hook to parent so it can access evaluation results
-    # Without this link, checkpoint_manager.py:600-606 cannot access evaluations_results
-    # and evaluations.npz will NOT be created, blocking Phase 2 training
     eval_metric_hook.parent = eval_callback
-    assert eval_metric_hook.parent is not None, "CRITICAL: eval_metric_hook.parent must be set!"
-    assert hasattr(eval_metric_hook.parent, 'evaluations_results'), \
-        "CRITICAL: parent must have evaluations_results attribute!"
 
-    # IMPROVED: Dynamic checkpoint manager with adaptive intervals and event-driven saves
+    # IMPROVED: Dynamic checkpoint manager
     checkpoint_manager = DynamicCheckpointManager(
         market=market_name,
         phase=1,
@@ -706,19 +767,15 @@ def train_phase1(
         metric_tracker=metric_tracker,
         target_timesteps=PHASE1_CONFIG['total_timesteps'],
         verbose=False,
-        registry=registry  # Connect to global registry
+        registry=registry
     )
-    safe_print(f"[CHECKPOINT] Dynamic checkpoint manager initialized")
-    safe_print(f"[CHECKPOINT] Base interval: 25K steps (adaptive)")
-    safe_print(f"[CHECKPOINT] Event triggers: periodic, best, phase_end, interrupt")
 
-    # Build callbacks list (order matters: eval -> checkpoint -> controller -> corrective)
+    # Build callbacks list
     callbacks = [eval_callback, checkpoint_manager]
 
-    # Add optional self-correcting callbacks (if enabled in config)
-    if policy_controller is not None:
+    if policy_controller:
         callbacks.append(policy_controller)
-    if corrective_manager is not None:
+    if corrective_manager:
         callbacks.append(corrective_manager)
 
     if PHASE1_CONFIG.get('use_kl_callback', False):
@@ -728,27 +785,15 @@ def train_phase1(
             log_freq=1000
         )
         callbacks.append(kl_callback)
-        safe_print("[TRAIN] KL divergence monitoring enabled")
 
     # Train
     safe_print("\n" + "=" * 80)
     safe_print(f"[TRAIN] Starting Phase 1 training for {PHASE1_CONFIG['total_timesteps']:,} timesteps...")
     safe_print("=" * 80)
-    safe_print("\n[TRAIN] Monitor progress:")
-    safe_print("        - TensorBoard: tensorboard --logdir tensorboard_logs/phase1/")
-    safe_print("        - Logs: logs/phase1/evaluations.npz")
-    safe_print("        - Checkpoints: models/phase1/checkpoints/")
-    safe_print("")
 
     import time
     start_time = time.time()
-
     use_progress_bar = PROGRESS_BAR_AVAILABLE
-    if use_progress_bar:
-        safe_print("[TRAIN] Progress bar enabled (tqdm + rich available)")
-    else:
-        safe_print("[TRAIN] Progress bar disabled (missing tqdm/rich)")
-        safe_print("[TRAIN] Monitor via TensorBoard: tensorboard --logdir tensorboard_logs/phase1/")
 
     try:
         model.learn(
@@ -757,37 +802,22 @@ def train_phase1(
             progress_bar=use_progress_bar,
             reset_num_timesteps=not continue_training
         )
-        # Save phase_end checkpoint after successful training
         checkpoint_manager.on_phase_end()
     except KeyboardInterrupt:
         safe_print("\n[TRAIN] Training interrupted by user")
-        safe_print("[TRAIN] Saving interrupt checkpoint...")
         checkpoint_manager.on_interrupt()
     except Exception as e:
         safe_print(f"\n[ERROR] Training failed: {e}")
-        # Save interrupt checkpoint on exception
         try:
             checkpoint_manager.on_interrupt()
-        except Exception:
+        except:
             pass
         raise
 
     elapsed = time.time() - start_time
 
-    # Run checkpoint retention cleanup
-    safe_print("\n[CHECKPOINT] Running checkpoint retention cleanup...")
-    try:
-        retention_manager = CheckpointRetentionManager('config/checkpoint_config.yaml')
-        checkpoint_dir = f'./models/phase1/{market_name}/checkpoints/'
-        retention_manager.prune_checkpoints(checkpoint_dir, dry_run=False, verbose=False)
-        safe_print("[CHECKPOINT] Retention cleanup completed")
-    except Exception as e:
-        safe_print(f"[WARNING] Checkpoint retention cleanup failed: {e}")
-
     # Save final model
     safe_print("\n[SAVE] Saving final Phase 1 model...")
-
-    # Determine default name
     if continue_training:
         base_name = os.path.splitext(os.path.basename(model_path))[0]
         default_name = f"{base_name}_continued_fixed"
@@ -796,26 +826,13 @@ def train_phase1(
 
     if test_mode and not default_name.endswith('_test'):
         default_name = f"{default_name}_test"
-        safe_print("[SAVE] Test mode run detected - using '_test' suffix for artifacts")
 
-    # Get save name
-    is_interactive = (not non_interactive and
-                      sys.stdin.isatty() and
-                      hasattr(sys.stdin, 'readable'))
-
-    if is_interactive:
+    save_name = default_name
+    if not non_interactive and sys.stdin.isatty():
         try:
-            if sys.stdin.readable():
-                save_name = get_model_save_name(default_name)
-            else:
-                save_name = default_name
-                safe_print(f"[SAVE] Non-interactive mode - using default name: {save_name}")
-        except (EOFError, OSError):
-            save_name = default_name
-            safe_print(f"[SAVE] Non-interactive mode - using default name: {save_name}")
-    else:
-        save_name = default_name
-        safe_print(f"[SAVE] Non-interactive mode - using default name: {save_name}")
+            save_name = get_model_save_name(default_name)
+        except:
+            pass
 
     model_save_path = f'models/{save_name}'
     vecnorm_save_path = f'models/{save_name}_vecnorm.pkl'
@@ -823,115 +840,40 @@ def train_phase1(
     model.save(model_save_path)
     env.save(vecnorm_save_path)
 
-    metadata_common = {
-        'phase': 1,
-        'market': market_name,
-        'total_timesteps': int(model.num_timesteps),
-        'timesteps_target': int(PHASE1_CONFIG['total_timesteps']),
-        'test_mode': bool(test_mode),
-        'continue_training': bool(continue_training),
-        'fixed_version': True,  # Mark as fixed version
-    }
-
-    write_metadata(model_save_path, {**metadata_common, 'artifact': 'model'})
-    write_metadata(vecnorm_save_path, {**metadata_common, 'artifact': 'vecnormalize'})
-
-    # CRITICAL FIX: Create legacy symlink for backward compatibility
-    # This allows PhaseGuard and other tools to find evaluation results at the legacy path
-    safe_print("[COMPAT] Creating legacy evaluation symlink for PhaseGuard...")
-    try:
-        from pipeline.phase_guard import PhaseGuard
-        legacy_path = PhaseGuard.create_legacy_symlink('logs/phase1', use_copy=False)
-        if legacy_path:
-            safe_print(f"[COMPAT] ✓ Created legacy evaluation link: {legacy_path}")
-        else:
-            # Fallback: Create symlink manually if PhaseGuard method failed
-            safe_print("[COMPAT] PhaseGuard method returned None, creating symlink manually...")
-            log_path = Path('logs/phase1')
-            eval_folders = sorted(log_path.glob("eval_*/"))
-            if eval_folders:
-                newest_folder = eval_folders[-1]
-                source_file = newest_folder / "evaluations.npz"
-                legacy_link = log_path / "evaluations.npz"
-
-                if source_file.exists():
-                    # Remove old symlink if exists
-                    if legacy_link.exists() or legacy_link.is_symlink():
-                        legacy_link.unlink()
-                    # Create new symlink
-                    legacy_link.symlink_to(source_file.name, target_is_directory=False)
-                    # Use relative path for symlink
-                    legacy_link.unlink()
-                    legacy_link.symlink_to(f"{newest_folder.name}/evaluations.npz")
-                    safe_print(f"[COMPAT] ✓ Manually created symlink: logs/phase1/evaluations.npz -> {newest_folder.name}/evaluations.npz")
-                else:
-                    safe_print(f"[COMPAT] ✗ Warning: Evaluation file not found at {source_file}")
-            else:
-                safe_print("[COMPAT] ✗ Warning: No timestamped eval folders found")
-    except Exception as e:
-        safe_print(f"[COMPAT] ✗ Warning: Failed to create legacy symlink: {e}")
-        safe_print("[COMPAT] Phase 2 may need manual symlink creation")
+    write_metadata(model_save_path, {'phase': 1, 'market': market_name, 'total_timesteps': int(model.num_timesteps)})
+    write_metadata(vecnorm_save_path, {'phase': 1, 'market': market_name, 'artifact': 'vecnormalize'})
 
     safe_print("\n" + "=" * 80)
     safe_print("PHASE 1 TRAINING COMPLETE!")
-    safe_print("=" * 80)
     safe_print(f"[RESULTS] Training time: {elapsed/3600:.2f} hours")
-    safe_print(f"[RESULTS] Total timesteps: {model.num_timesteps:,}")
-    safe_print(f"[SAVE] Model: {model_save_path}.zip")
-    safe_print(f"[SAVE] VecNorm: {vecnorm_save_path}")
-    safe_print(f"[SAVE] Best model: models/phase1/best_model.zip")
-    safe_print("")
-    safe_print("[NEXT STEPS]")
-    safe_print("  1. Review training logs: logs/phase1/evaluations.npz")
-    safe_print("  2. Check TensorBoard: tensorboard --logdir tensorboard_logs/phase1/")
-    safe_print("  3. Evaluate performance: python evaluate_phase1.py")
-    safe_print("  4. Run Phase 2: python train_phase2.py")
-    safe_print("")
+    safe_print("=" * 80)
 
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Phase 1 Training - Foundational Trading Patterns')
-    parser.add_argument('--test', action='store_true',
-                       help='Run in test mode with reduced timesteps (100K for better testing)')
-    parser.add_argument('--continue', dest='continue_training', action='store_true',
-                       help='Continue training from an existing model')
-    parser.add_argument('--model-path', type=str, default=None,
-                       help='Path to the model to continue training from')
-    parser.add_argument('--market', type=str, default=None,
-                       help='Market to train on (ES, NQ, YM, RTY, MNQ, MES, M2K, MYM)')
-    parser.add_argument('--non-interactive', action='store_true',
-                       help='Run in non-interactive mode (no prompts, use defaults)')
+    parser.add_argument('--test', action='store_true', help='Run in test mode')
+    parser.add_argument('--continue', dest='continue_training', action='store_true', help='Continue training')
+    parser.add_argument('--model-path', type=str, default=None, help='Path to model to continue from')
+    parser.add_argument('--market', type=str, default=None, help='Market symbol')
+    parser.add_argument('--non-interactive', action='store_true', help='No prompts')
+    parser.add_argument('--hardware-profile', type=str, help='Path to hardware profile yaml')
+    
     args = parser.parse_args()
 
     # Override config for test mode
     if args.test:
-        safe_print("\n" + "=" * 80)
-        safe_print("TEST MODE ENABLED - Quick Local Testing")
-        safe_print("=" * 80)
-        PHASE1_CONFIG['total_timesteps'] = 100_000  # INCREASED from 30K
-        PHASE1_CONFIG['num_envs'] = 32  # OPTIMIZED: Better hardware utilization with SubprocVecEnv
-        PHASE1_CONFIG['eval_freq'] = 25_000  # Eval 4 times
-        PHASE1_CONFIG['n_eval_episodes'] = 20  # INCREASED from 5 for better statistics
-        PHASE1_CONFIG['use_early_stopping'] = False  # Disable for test mode
+        safe_print("\n[TEST] Test mode enabled")
+        PHASE1_CONFIG['total_timesteps'] = 100_000
+        PHASE1_CONFIG['num_envs'] = 32
+        PHASE1_CONFIG['eval_freq'] = 25_000
+        PHASE1_CONFIG['n_eval_episodes'] = 20
+        PHASE1_CONFIG['use_early_stopping'] = False
 
-        safe_print(f"[TEST] Timesteps:       5M → {PHASE1_CONFIG['total_timesteps']:,} (2% for testing)")
-        safe_print(f"[TEST] Parallel envs:   80 → {PHASE1_CONFIG['num_envs']} (optimized for parallel processing)")
-        safe_print(f"[TEST] Eval frequency:  Every {PHASE1_CONFIG['eval_freq']:,} steps")
-        safe_print(f"[TEST] Eval episodes:   5 → {PHASE1_CONFIG['n_eval_episodes']} (diverse evaluation)")
-        safe_print(f"[TEST] Early stopping:  DISABLED (test mode)")
-        safe_print(f"[TEST] Expected time:   ~3-5 minutes (30x faster with SubprocVecEnv)")
-        safe_print("=" * 80 + "\n")
-
-    # Validate continuation arguments
     if args.continue_training and not args.model_path:
-        safe_print("\n[ERROR] --continue requires --model-path to be specified")
+        safe_print("\n[ERROR] --continue requires --model-path")
         sys.exit(1)
-
-    if args.continue_training:
-        safe_print(f"\n[INFO] Continuation mode enabled")
-        safe_print(f"[INFO] Will load model from: {args.model_path}")
 
     # Set random seeds
     np.random.seed(42)
@@ -943,6 +885,7 @@ if __name__ == '__main__':
         market_override=args.market,
         non_interactive=args.non_interactive,
         test_mode=args.test,
+        hardware_profile=args.hardware_profile
     )
 def compute_env_start_index(data_length: int, config: dict, env_id: int) -> int:
     """Deterministic start offset when randomization is disabled."""

@@ -298,7 +298,12 @@ def collect_rollouts_phase2(
         )
         
         key_resets = jax.random.split(key_reset, num_envs)
-        reset_obs_batch, reset_states = batch_reset_phase2(key_reset, env_params, num_envs, data)
+        reset_obs_batch, reset_states = batch_reset_phase2(
+            jax.random.split(key_reset, num_envs),
+            env_params,
+            num_envs,
+            data
+        )
         
         final_states = jax.tree.map(
             lambda reset_val, next_val: jnp.where(
@@ -436,7 +441,12 @@ def train_phase2(
     normalizer = create_normalizer(obs_shape)
     
     key, reset_key = jax.random.split(key)
-    obs, env_states = batch_reset_phase2(reset_key, env_params, config.num_envs, data)
+    obs, env_states = batch_reset_phase2(
+        jax.random.split(reset_key, config.num_envs),
+        env_params,
+        config.num_envs,
+        data
+    )
     
     runner_state = RunnerState(
         train_state=train_state,
@@ -470,12 +480,79 @@ def train_phase2(
         
     start_time = time.time()
     
+    # Delta tracking variables for metrics (Phase 1 pattern)
+    prev_total_trades = 0      # Track cumulative trades for delta calculation
+    prev_total_winning = 0     # Track cumulative wins for delta calculation
+    prev_avg_balance = env_params.initial_balance  # Track avg balance for delta calculation
+    
     # Import train_step from fixed PPO (it's generic)
     from src.jax_migration.train_ppo_jax_fixed import train_step
     
     for update in range(num_updates):
         key, rollout_key, train_key = jax.random.split(runner_state.key, 3)
         runner_state = runner_state._replace(key=key, update_step=jnp.array(update))
+        
+        # ===== 3-SUB-PHASE CURRICULUM (Critical for solving HOLD trap) =====
+        # Phase 2A (0-20%): Position Boot Camp - 50% forced positions, high PM bonus
+        # Phase 2B (20-80%): Integrated Trading - forced ratio decays 50%→10%
+        # Phase 2C (80-100%): Production Hardening - 0% forced, realistic conditions
+        
+        current_global_timestep = update * config.num_envs * config.num_steps
+        training_progress = update / num_updates
+        
+        # Calculate curriculum parameters based on progress
+        if training_progress < 0.20:  # Phase 2A: Boot Camp
+            forced_position_ratio = 0.5  # 50% start with position
+            pm_bonus_mult = 1.0  # Full PM bonus ($400)
+            entry_bonus_mult = 1.0  # Full entry bonus ($300)
+            commission_mult = 0.1  # Very low commission
+            phase_name = "2A-Boot"
+        elif training_progress < 0.80:  # Phase 2B: Integrated
+            phase_progress = (training_progress - 0.20) / 0.60  # 0→1 within Phase 2B
+            forced_position_ratio = 0.5 - 0.4 * phase_progress  # 50%→10%
+            pm_bonus_mult = 1.0 - 0.75 * phase_progress  # 100%→25%
+            entry_bonus_mult = 1.0 - 0.5 * phase_progress  # 100%→50%
+            commission_mult = 0.1 + 0.7 * phase_progress  # 10%→80%
+            phase_name = "2B-Int"
+        else:  # Phase 2C: Production Hardening
+            forced_position_ratio = 0.0  # No forced positions
+            pm_bonus_mult = 0.0  # No exploration bonus
+            entry_bonus_mult = 0.0  # No exploration bonus
+            commission_mult = 1.0  # Full commission
+            phase_name = "2C-Prod"
+        
+        # Calculate actual bonus values
+        pm_bonus = 400.0 * pm_bonus_mult
+        entry_bonus = 300.0 * entry_bonus_mult
+        curriculum_commission = 2.5 * commission_mult
+        
+        # Update env_params with current progress (chex dataclass requires recreate)
+        env_params = EnvParamsPhase2(
+            contract_size=env_params.contract_size, tick_size=env_params.tick_size,
+            tick_value=env_params.tick_value, commission=env_params.commission,
+            slippage_ticks=env_params.slippage_ticks, initial_balance=env_params.initial_balance,
+            sl_atr_mult=env_params.sl_atr_mult, tp_sl_ratio=env_params.tp_sl_ratio,
+            position_size=env_params.position_size, trailing_dd_limit=env_params.trailing_dd_limit,
+            risk_per_trade=env_params.risk_per_trade, max_position_size=env_params.max_position_size,
+            contract_value=env_params.contract_value, window_size=env_params.window_size,
+            num_features=env_params.num_features, rth_open=env_params.rth_open,
+            rth_close=env_params.rth_close, min_episode_bars=env_params.min_episode_bars,
+            trail_activation_mult=env_params.trail_activation_mult,
+            trail_distance_atr=env_params.trail_distance_atr,
+            be_min_profit_atr=env_params.be_min_profit_atr,
+            initial_commission=curriculum_commission,  # Use curriculum commission
+            final_commission=env_params.final_commission,
+            commission_curriculum=True,
+            training_progress=training_progress,
+            current_global_timestep=float(current_global_timestep),
+            total_training_timesteps=float(config.total_timesteps),
+            # NEW: Forced position curriculum
+            forced_position_ratio=forced_position_ratio,
+            forced_position_profit_range=1.0,
+            # NEW: Action-specific exploration bonuses
+            pm_action_exploration_bonus=pm_bonus,
+            entry_action_exploration_bonus=entry_bonus
+        )
         
         transitions, runner_state, episode_returns = collect_rollouts_phase2(
             runner_state, env_params, data, config.num_steps, config.num_envs
@@ -494,20 +571,86 @@ def train_phase2(
         runner_state = runner_state._replace(train_state=new_train_state)
         jax.block_until_ready(runner_state.train_state.params)
         
-        # Update metrics tracker with episode completions
-        # Note: infos contains aggregated data - we track cumulative metrics
-        # For proper episode tracking, we'd need to detect individual episode dones
-        # For now, we log aggregated metrics periodically
+        # ===== UPDATE METRICS TRACKER WITH DELTA STATS (Phase 1 pattern) =====
+        # Extract current statistics from environment states
+        final_env_states = runner_state.env_states  # Shape: (num_envs,)
+        
+        current_total_trades = int(final_env_states.num_trades.sum())
+        current_total_winning = int(final_env_states.winning_trades.sum())
+        avg_balance = float(final_env_states.balance.mean())  # CRITICAL: Use .mean() not .sum()!
+        
+        # Calculate DELTAS (changes since last update)
+        if update == 0:
+            # First update - all current values are deltas
+            new_trades_this_update = current_total_trades
+            new_wins_this_update = current_total_winning
+            avg_pnl_delta = 0.0  # No PnL delta on first update
+        else:
+            # Calculate deltas from previous update
+            new_trades_this_update = current_total_trades - prev_total_trades
+            new_wins_this_update = current_total_winning - prev_total_winning
+            avg_pnl_delta = avg_balance - prev_avg_balance  # Average PnL change per env
+        
+        # Calculate win rate for NEW trades this update only
+        win_rate_this_update = new_wins_this_update / max(new_trades_this_update, 1) if new_trades_this_update > 0 else 0.0
+        
+        # Update tracker with DELTA stats (per-env averages, not num_envs× sums)
+        metrics_tracker.record_episode(
+            final_balance=avg_balance,
+            num_trades=new_trades_this_update,      # DELTA, not cumulative
+            win_rate=win_rate_this_update,          # Win rate of new trades only
+            total_pnl=avg_pnl_delta                 # DELTA, not cumulative
+        )
+        
+        # Store current values for next delta calculation
+        prev_total_trades = current_total_trades
+        prev_total_winning = current_total_winning
+        prev_avg_balance = avg_balance
         
         if (update + 1) % 1 == 0:
             elapsed = time.time() - start_time
             timesteps = (update + 1) * config.num_envs * config.num_steps
             sps = timesteps / elapsed
-            print(f"Update {update + 1}/{num_updates} | SPS: {sps:,.0f} | Return: {episode_returns.mean():.2f} | Loss: {train_metrics['policy_loss']:.4f}")
+            
+            # Use curriculum values calculated above (phase_name, pm_bonus, entry_bonus, forced_position_ratio)
+            bonus_str = f"Entry: ${entry_bonus:.0f}, PM: ${pm_bonus:.0f}" if pm_bonus > 0 or entry_bonus > 0 else "Disabled"
+            forced_str = f"Forced: {forced_position_ratio*100:.0f}%" if forced_position_ratio > 0 else ""
+            
+            # Enhanced logging with phase name and curriculum info
+            print(f"[{phase_name}] Update {update + 1}/{num_updates} | SPS: {sps:,.0f} | Return: {episode_returns.mean():.2f} | Loss: {train_metrics['policy_loss']:.4f} | {forced_str} 🎯 {bonus_str} | Comm: ${curriculum_commission:.2f}")
         
-        # Log metrics tracker every 10 updates
+        # ===== ACTION DISTRIBUTION MONITORING (Critical for detecting HOLD trap) =====
+        # Track distribution for all 6 actions every 10 updates
         if (update + 1) % 10 == 0:
-            metrics_tracker.log_to_console(update + 1, num_updates)
+            # Get action distribution from rollout
+            actions_flat = np.array(transitions.action).flatten()
+            action_counts = np.bincount(actions_flat, minlength=6)
+            action_pcts = action_counts / max(action_counts.sum(), 1)
+            
+            # Action names for Phase 2
+            action_names = ['HOLD', 'BUY', 'SELL', 'SL→BE', 'TRAIL+', 'TRAIL-']
+            
+            # Build action distribution string
+            dist_parts = [f"{action_names[i]}: {action_pcts[i]*100:.1f}%" for i in range(6)]
+            action_dist_str = " | ".join(dist_parts)
+            print(f"     📊 Actions: {action_dist_str}")
+            
+            # Warn if PM actions are underutilized (below 2% each after Phase 2A)
+            if training_progress > 0.25:  # After Boot Camp
+                pm_actions_pct = action_pcts[3:6].sum()
+                if pm_actions_pct < 0.03:  # Less than 3% total PM actions
+                    print(f"     ⚠️ WARNING: PM actions underutilized ({pm_actions_pct*100:.1f}% total)")
+            
+            # Get current metrics from tracker
+            status = metrics_tracker.get_metrics()
+            total_trades = status.get('total_trades', 0)
+            win_rate = status.get('win_rate', 0.0)
+            total_pnl = status.get('total_pnl', 0.0)
+            current_balance = status.get('current_balance', 50000.0)
+            
+            # Simple one-line format like Phase 1
+            print(f"     Trades: {total_trades} | Win Rate: {win_rate:.1%} | P&L: ${total_pnl:.2f} | Balance: ${current_balance:,.2f}")
+            
             # Save metrics to JSON
             metrics_json_path = f"results/{market}_jax_phase2_realtime_metrics.json"
             metrics_tracker.save_to_json(metrics_json_path, include_history=True)
@@ -519,7 +662,8 @@ def train_phase2(
                 target=runner_state.train_state,
                 step=update + 1,
                 prefix="phase2_jax_",
-                keep=3
+                keep=3,
+                overwrite=True
             )
             # Save normalizer
             with open(os.path.join(checkpoint_dir, f"normalizer_{update + 1}.pkl"), "wb") as f:

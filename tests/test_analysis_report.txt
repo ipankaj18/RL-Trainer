@@ -1,0 +1,123 @@
+
+============================================================
+PROFITABILITY ANALYSIS - PHASE 1 & 2 TEST RESULTS
+============================================================
+
+============================================================
+PHASE 1 ANALYSIS
+============================================================
+
+Training Progress:
+   Evaluations: 6
+   Timesteps range: 786,432 -> 4,718,592
+   Episodes per eval: 10
+
+Reward Analysis:
+
+   Eval 1 @ 786,432 steps:
+      Mean:     9.00 +/- 9.78
+      Range: [   -2.93,    24.02]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 2 @ 1,572,864 steps:
+      Mean:    11.34 +/- 8.95
+      Range: [   -1.38,    25.01]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 3 @ 2,359,296 steps:
+      Mean:    11.32 +/- 9.14
+      Range: [   -2.94,    22.96]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 4 @ 3,145,728 steps:
+      Mean:    13.71 +/- 8.62
+      Range: [    2.12,    27.94]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 5 @ 3,932,160 steps:
+      Mean:    17.14 +/- 7.62
+      Range: [    2.17,    27.91]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 6 @ 4,718,592 steps:
+      Mean:     7.92 +/- 8.63
+      Range: [   -0.69,    25.80]
+      Status: PROFITABLE (positive mean reward)
+
+Learning Trend:
+   Early average: 10.55
+   Late average: 12.92
+   Improvement: +2.37
+   Trend: IMPROVING
+
+Episode Length Analysis:
+   Eval 1: 13716 steps (avg)
+   Eval 2: 15358 steps (avg)
+   Eval 3: 16298 steps (avg)
+   Eval 4: 15049 steps (avg)
+   Eval 5: 20138 steps (avg)
+   Eval 6: 11866 steps (avg)
+
+FINAL VERDICT (Last Evaluation):
+   Mean Reward: 7.92
+   STRONGLY PROFITABLE - Model is ready for production
+
+============================================================
+PHASE 2 ANALYSIS
+============================================================
+
+Training Progress:
+   Evaluations: 3
+   Timesteps range: 524,288 -> 1,572,864
+   Episodes per eval: 20
+
+Reward Analysis:
+
+   Eval 1 @ 524,288 steps:
+      Mean:    -1.93 +/- 5.45
+      Range: [  -16.11,    12.19]
+      Status: UNPROFITABLE (negative mean reward)
+
+   Eval 2 @ 1,048,576 steps:
+      Mean:     9.98 +/- 23.73
+      Range: [   -6.80,    85.35]
+      Status: PROFITABLE (positive mean reward)
+
+   Eval 3 @ 1,572,864 steps:
+      Mean:    -8.87 +/- 13.76
+      Range: [  -55.86,     2.95]
+      Status: UNPROFITABLE (negative mean reward)
+
+Learning Trend:
+   Early average: -1.93
+   Late average: 0.55
+   Improvement: +2.48
+   Trend: IMPROVING
+
+Episode Length Analysis:
+   Eval 1: 42 steps (avg)
+   Eval 2: 65 steps (avg)
+   Eval 3: 120 steps (avg)
+
+FINAL VERDICT (Last Evaluation):
+   Mean Reward: -8.87
+   UNPROFITABLE - Model is not ready, needs redesign
+
+
+============================================================
+OVERALL SUMMARY
+============================================================
+
+Phase 1 (Entry Pattern Learning):
+   Final Performance: 7.92 +/- 8.63
+   STRONGLY PROFITABLE - Model is ready for production
+
+Phase 2 (Position Management):
+   Final Performance: -8.87 +/- 13.76
+   UNPROFITABLE - Model is not ready, needs redesign
+
+COMBINED ASSESSMENT:
+   Mixed results - one phase profitable, one not
+
+============================================================
+

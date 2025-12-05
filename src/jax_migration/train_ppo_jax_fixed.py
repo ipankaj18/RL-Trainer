@@ -29,6 +29,9 @@ from .env_phase1_jax import (
     reset, step, action_masks, get_observation,
     batch_reset, batch_step, batch_action_masks
 )
+from .training_metrics_tracker import TrainingMetricsTracker  # Phase 2 integration
+from .training_quality_monitor import TrainingQualityMonitor  # NEW: Phase C integration
+from .hyperparameter_auto_adjuster import HyperparameterAutoAdjuster  # NEW: Phase C integration
 
 
 # =============================================================================
@@ -113,29 +116,65 @@ class ActorCritic(nn.Module):
         return logits, value.squeeze(-1)
 
 
-def masked_softmax(logits: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
-    """Apply mask to logits and compute softmax."""
+def masked_softmax(
+    logits: jnp.ndarray,
+    mask: jnp.ndarray,
+    exploration_floor: float = 0.0,  # NEW parameter
+    floor_actions: tuple = (1, 2)     # BUY=1, SELL=2 (not used when traced)
+) -> jnp.ndarray:
+    """
+    Apply mask to logits and compute softmax with optional exploration floor.
+
+    PHASE B: Minimum action probability floor prevents HOLD trap by guaranteeing
+    minimum probability for BUY/SELL actions during exploration phase.
+    
+    CRITICAL FIX: Uses jnp.where() instead of Python if/for to avoid
+    TracerBoolConversionError when exploration_floor is traced inside JIT.
+    """
     masked_logits = jnp.where(mask, logits, -1e10)
-    return jax.nn.softmax(masked_logits, axis=-1)
+    probs = jax.nn.softmax(masked_logits, axis=-1)
+
+    # PHASE B: Apply minimum probability floor for BUY (1) and SELL (2) actions
+    # CRITICAL: Use jnp.where() instead of Python 'if' to avoid TracerBoolConversionError
+    # when exploration_floor becomes a traced value inside lax.scan/vmap
+    
+    # Apply floor to BUY action (index 1)
+    floored_probs = probs.at[..., 1].set(
+        jnp.maximum(probs[..., 1], exploration_floor)
+    )
+    # Apply floor to SELL action (index 2)
+    floored_probs = floored_probs.at[..., 2].set(
+        jnp.maximum(floored_probs[..., 2], exploration_floor)
+    )
+    # Renormalize to ensure probabilities sum to 1.0
+    floored_probs = floored_probs / floored_probs.sum(axis=-1, keepdims=True)
+    
+    # Use jnp.where to conditionally apply floored probs (JAX-compatible)
+    # When exploration_floor > 0, use floored_probs; otherwise use original probs
+    probs = jnp.where(exploration_floor > 0.0, floored_probs, probs)
+
+    return probs
 
 
 def sample_action(
-    key: jax.random.PRNGKey, 
-    logits: jnp.ndarray, 
-    mask: jnp.ndarray
+    key: jax.random.PRNGKey,
+    logits: jnp.ndarray,
+    mask: jnp.ndarray,
+    exploration_floor: float = 0.0
 ) -> jnp.ndarray:
     """Sample action from masked categorical distribution."""
-    probs = masked_softmax(logits, mask)
+    probs = masked_softmax(logits, mask, exploration_floor=exploration_floor)
     return jax.random.categorical(key, jnp.log(probs + 1e-8))
 
 
 def log_prob_action(
-    logits: jnp.ndarray, 
-    action: jnp.ndarray, 
-    mask: jnp.ndarray
+    logits: jnp.ndarray,
+    action: jnp.ndarray,
+    mask: jnp.ndarray,
+    exploration_floor: float = 0.0
 ) -> jnp.ndarray:
     """Compute log probability of action under masked distribution."""
-    probs = masked_softmax(logits, mask)
+    probs = masked_softmax(logits, mask, exploration_floor=exploration_floor)
     return jnp.log(probs[action] + 1e-8)
 
 
@@ -162,7 +201,7 @@ class PPOConfig(NamedTuple):
     num_epochs: int = 4
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_eps: float = 0.2
+    clip_eps: float = 0.15
     ent_coef: float = 0.01
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
@@ -234,19 +273,20 @@ def ppo_loss(
     advantages: jnp.ndarray,
     clip_eps: float,
     ent_coef: float,
-    vf_coef: float
+    vf_coef: float,
+    exploration_floor: float = 0.0  # NEW: Phase B parameter
 ) -> Tuple[jnp.ndarray, dict]:
     """
     Compute PPO loss with action masking.
-    
+
     Returns:
         loss: scalar loss value
         metrics: dictionary of logged metrics
     """
     logits, values = apply_fn(params, batch.obs)
-    
-    # Compute log probabilities under current policy
-    probs = masked_softmax(logits, batch.mask)
+
+    # Compute log probabilities under current policy (with exploration floor)
+    probs = masked_softmax(logits, batch.mask, exploration_floor=exploration_floor)
     log_probs = jnp.log(probs + 1e-8)
     new_log_prob = log_probs[jnp.arange(batch.action.shape[0]), batch.action]
     
@@ -359,40 +399,45 @@ def collect_rollouts(
     env_params: EnvParams,
     data: MarketData,
     num_steps: int,
-    num_envs: int
+    num_envs: int,
+    exploration_floor: float = 0.0  # NEW: Phase B parameter
 ) -> Tuple[Transition, RunnerState, jnp.ndarray]:
     """
     FIXED: Properly collect rollouts with correct observation computation.
-    
+
     Returns:
         transitions: collected experience
         new_runner_state: updated state
         episode_returns: sum of rewards per episode
     """
     train_state, env_states, normalizer, key, update_step = runner_state
-    
+
     def step_fn(carry, _):
         env_states, key, normalizer = carry
         key, key_step, key_action, key_reset = jax.random.split(key, 4)
-        
+
         # FIXED: Proper observation computation
         obs_batch = get_batched_observations(env_states, data, env_params)
-        
+
         # Normalize observations
         obs_normalized = normalize_obs(obs_batch, normalizer)
-        
+
         # Get action masks
         masks = batch_action_masks(env_states)
-        
+
         # Get policy outputs
         logits, values = train_state.apply_fn(train_state.params, obs_normalized)
-        
-        # Sample actions with masking
+
+        # Sample actions with masking (Phase B: apply exploration floor)
         key_actions = jax.random.split(key_action, num_envs)
-        actions = jax.vmap(sample_action)(key_actions, logits, masks)
-        
-        # Compute log probs
-        log_probs = jax.vmap(log_prob_action)(logits, actions, masks)
+        actions = jax.vmap(lambda k, l, m: sample_action(k, l, m, exploration_floor))(
+            key_actions, logits, masks
+        )
+
+        # Compute log probs (Phase B: apply exploration floor)
+        log_probs = jax.vmap(lambda l, a, m: log_prob_action(l, a, m, exploration_floor))(
+            logits, actions, masks
+        )
         
         # Step environments
         key_steps = jax.random.split(key_step, num_envs)
@@ -402,7 +447,7 @@ def collect_rollouts(
         
         # FIXED: Auto-reset done environments
         key_resets = jax.random.split(key_reset, num_envs)
-        reset_obs_batch, reset_states = batch_reset(key_reset, env_params, num_envs, data)
+        reset_obs_batch, reset_states = batch_reset(key_resets, env_params, data)
         
         # Select reset or continued state based on done
         final_states = jax.tree.map(
@@ -454,13 +499,19 @@ def collect_rollouts(
         0.95   # gae_lambda from config
     )
     
+    # FIXED: Calculate episode returns using ACTUAL rewards, not GAE returns
+    # Must be done BEFORE replacing transitions.reward with GAE returns
+    episode_returns = (transitions.reward * (1 - transitions.done)).sum(axis=0)
+    
     # Replace value with advantages, reward with returns for loss
     transitions = transitions._replace(
         reward=returns,
         value=advantages
     )
     
-    episode_returns = (transitions.reward * (1 - transitions.done)).sum(axis=0)
+    # NEW: Phase B2 - Calculate action distribution for monitoring
+    action_counts = jnp.bincount(transitions.action.flatten(), length=3)
+    action_dist = action_counts / transitions.action.size
     
     new_runner_state = RunnerState(
         train_state=train_state,
@@ -470,7 +521,7 @@ def collect_rollouts(
         update_step=update_step
     )
     
-    return transitions, new_runner_state, episode_returns
+    return transitions, new_runner_state, episode_returns, action_dist  # Added action_dist
 
 
 @partial(jax.jit, static_argnums=(3,))  # config is static for batch size computation
@@ -479,7 +530,8 @@ def train_step(
     transitions: Transition,
     advantages: jnp.ndarray,
     config: PPOConfig,
-    key: jax.random.PRNGKey
+    key: jax.random.PRNGKey,
+    exploration_floor: float = 0.0  # NEW: Phase B parameter
 ) -> Tuple[TrainState, dict]:
     """
     Single PPO training step with multiple epochs and minibatches.
@@ -512,7 +564,7 @@ def train_step(
         
         def minibatch_step(train_state, batch_and_adv):
             batch, adv = batch_and_adv
-            
+
             loss_fn = partial(
                 ppo_loss,
                 apply_fn=train_state.apply_fn,
@@ -520,7 +572,8 @@ def train_step(
                 advantages=adv,
                 clip_eps=config.clip_eps,
                 ent_coef=config.ent_coef,
-                vf_coef=config.vf_coef
+                vf_coef=config.vf_coef,
+                exploration_floor=exploration_floor  # NEW: Phase B
             )
             
             (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(
@@ -557,11 +610,13 @@ def train(
     config: PPOConfig,
     env_params: EnvParams,
     data: MarketData,
-    seed: int = 0
+    seed: int = 0,
+    market: str = "UNKNOWN",  # NEW: For metrics tracker
+    checkpoint_dir: str = "models/phase1_jax"  # NEW: For metrics saving
 ) -> Tuple[TrainState, NormalizerState, list]:
     """
-    Main training loop - FIXED VERSION.
-    
+    Main training loop - FIXED VERSION with Metrics Tracker (Phase 2).
+
     Returns:
         trained_state: final trained parameters
         normalizer: observation normalization stats
@@ -578,7 +633,11 @@ def train(
     normalizer = create_normalizer(obs_shape)
     
     # Initial environment states
-    obs, env_states = batch_reset(reset_key, env_params, config.num_envs, data)
+    obs, env_states = batch_reset(
+        jax.random.split(reset_key, config.num_envs),
+        env_params,
+        data
+    )
     
     runner_state = RunnerState(
         train_state=train_state,
@@ -589,41 +648,131 @@ def train(
     )
     
     num_updates = config.total_timesteps // (config.num_envs * config.num_steps)
+
+    # NEW: Initialize metrics tracker (Phase 2 integration)
+    tracker = TrainingMetricsTracker(
+        market=market,
+        checkpoint_dir=checkpoint_dir,
+        phase=1
+    )
+    print(f"Metrics tracker initialized: {checkpoint_dir}/training_metrics_{market}.json")
     
+    # NEW: Phase C - Initialize adaptive training system
+    quality_monitor = TrainingQualityMonitor(
+        window_size=10,
+        min_trades_per_update=config.num_envs // 100,  # 1 trade per 100 envs
+        min_entropy=0.10,
+        max_hold_ratio=0.95
+    )
+    hyperparameter_adjuster = HyperparameterAutoAdjuster(log_dir=checkpoint_dir)
+    curriculum_slowdown_active = False
+    print(f"Adaptive training system initialized (auto-apply enabled)")
+
     print(f"Starting training:")
     print(f"  Total timesteps: {config.total_timesteps:,}")
     print(f"  Num envs: {config.num_envs}")
     print(f"  Steps per rollout: {config.num_steps}")
     print(f"  Num updates: {num_updates}")
     print(f"  Observation shape: {obs_shape}")
-    
+
     metrics_history = []
     start_time = time.time()
+    prev_total_trades = 0  # Track trades between updates for delta calculation
+    prev_total_winning = 0  # Track winning trades for delta calculation
+    prev_avg_balance = 10000.0  # Track average balance for delta calculation (starts at initial_balance)
+    
     
     for update in range(num_updates):
         key, rollout_key, train_key = jax.random.split(runner_state.key, 3)
+        
+        # NEW: Phase A1 - Calculate training progress for commission curriculum
+        base_progress = float(update) / num_updates
+        
+        # NEW: Phase C - Apply curriculum slowdown if quality is poor
+        if curriculum_slowdown_active:
+            progress = base_progress * 0.5  # Slow down curriculum by 50%
+        else:
+            progress = base_progress
+        
+        # Update environment params with current training progress
+        # NEW: Phase 1B - Also update global timestep for exploration bonus
+        current_global_timestep = float(update * config.num_envs * config.num_steps)
+        env_params = env_params._replace(
+            training_progress=progress,
+            current_global_timestep=current_global_timestep,
+            total_training_timesteps=float(config.total_timesteps)
+        )
         
         # Update runner state key
         runner_state = runner_state._replace(
             key=key,
             update_step=jnp.array(update)
         )
-        
-        # Collect rollouts
-        transitions, runner_state, episode_returns = collect_rollouts(
-            runner_state, env_params, data, config.num_steps, config.num_envs
+
+        # PHASE B: Calculate exploration floor (decays over training)
+        # Guarantees minimum 8% BUY and 8% SELL during first 40% of training
+        exploration_floor_horizon = config.total_timesteps * 0.40
+        floor_progress = min(1.0, current_global_timestep / exploration_floor_horizon)
+        base_floor = 0.08  # 8% minimum for BUY and SELL
+        current_floor = base_floor * max(0.0, 1.0 - floor_progress)
+
+        # Collect rollouts with updated params (includes curriculum commission + exploration floor)
+        transitions, runner_state, episode_returns, action_dist = collect_rollouts(
+            runner_state, env_params, data, config.num_steps, config.num_envs,
+            exploration_floor=current_floor  # NEW: Phase B
         )
-        
+
         # Extract advantages for training
         advantages = transitions.value  # GAE stored in value field
         
-        # Train on collected data
+        # NEW: Update metrics tracker with DELTA stats from environment states
+        # CRITICAL FIX v2: Use AVERAGE balance delta per env, not total PnL sum
+        final_env_states = runner_state.env_states  # Shape: (num_envs,)
+        
+        # Extract current statistics
+        current_total_trades = int(final_env_states.num_trades.sum())
+        current_total_winning = int(final_env_states.winning_trades.sum())
+        avg_balance = float(final_env_states.balance.mean())  # Average balance per env
+        
+        # Calculate DELTAS (changes since last update)
+        if update == 0:
+            # First update - all current values are deltas
+            new_trades_this_update = current_total_trades
+            new_wins_this_update = current_total_winning
+            avg_pnl_delta = 0.0  # No PnL delta on first update
+            prev_total_trades = 0
+            prev_total_winning = 0
+            prev_avg_balance = avg_balance
+        else:
+            # Calculate deltas from previous update
+            new_trades_this_update = current_total_trades - prev_total_trades
+            new_wins_this_update = current_total_winning - prev_total_winning
+            # FIXED: Use average balance change per env (realistic $50-$500 range)
+            avg_pnl_delta = avg_balance - prev_avg_balance
+        
+        # Calculate win rate for NEW trades this update only
+        win_rate_this_update = new_wins_this_update / max(new_trades_this_update, 1) if new_trades_this_update > 0 else 0.0
+        
+        # Update tracker with DELTA stats (per-env averages, not 384x sums)
+        tracker.record_episode(
+            final_balance=avg_balance,
+            num_trades=new_trades_this_update,
+            win_rate=win_rate_this_update,
+            total_pnl=avg_pnl_delta  # Average PnL change per env this update
+        )
+        
+        # Store current values for next delta calculation
+        prev_total_trades = current_total_trades
+        prev_total_winning = current_total_winning
+        prev_avg_balance = avg_balance
+
         new_train_state, train_metrics = train_step(
             runner_state.train_state,
             transitions,
             advantages,
             config,
-            train_key
+            train_key,
+            exploration_floor=current_floor  # NEW: Phase B
         )
         
         runner_state = runner_state._replace(train_state=new_train_state)
@@ -631,28 +780,130 @@ def train(
         # Block for accurate timing
         jax.block_until_ready(runner_state.train_state.params)
         
-        # Logging
+        # Logging + telemetry snapshot
+        elapsed = time.time() - start_time
+        timesteps = (update + 1) * config.num_envs * config.num_steps
+        # Calculate SPS with zero-check for elapsed time
+        # When training fails immediately, elapsed can be 0 or very small
+        sps = timesteps / elapsed if elapsed > 0 else 0.0
+        current_entropy = float(train_metrics['entropy'])
+        current_kl = float(train_metrics['approx_kl'])
+
+        tracker.record_update(
+            timesteps=timesteps,
+            sps=sps,
+            entropy=current_entropy,
+            approx_kl=current_kl,
+            action_dist=action_dist,
+            policy_loss=float(train_metrics['policy_loss']),
+            value_loss=float(train_metrics['value_loss']),
+            win_rate=win_rate_this_update,
+            mean_return=float(episode_returns.mean()),
+            learning_rate=float(config.learning_rate),
+            timesteps_target=config.total_timesteps
+        )
+
+        # Logging (every 10 updates)
         if (update + 1) % 10 == 0:
-            elapsed = time.time() - start_time
-            timesteps = (update + 1) * config.num_envs * config.num_steps
-            sps = timesteps / elapsed
+            # Calculate current commission for curriculum tracking
+            current_commission = env_params.initial_commission + \
+                (env_params.final_commission - env_params.initial_commission) * min(1.0, progress * 2.0)
+            
+            # NEW: Phase 1B - Calculate exploration bonus for monitoring
+            exploration_horizon = config.total_timesteps * 0.40  # Match env_phase1_jax.py
+            exploration_progress = current_global_timestep / exploration_horizon
+            current_exploration_bonus = 400.0 * max(0.0, 1.0 - exploration_progress)  # Match env_phase1_jax.py
             
             print(f"Update {update + 1}/{num_updates}")
             print(f"  Timesteps: {timesteps:,}")
             print(f"  SPS: {sps:,.0f}")
+            print(f"  Progress: {progress:.1%} | Commission: ${current_commission:.2f}")
+            if current_exploration_bonus > 0.0:
+                print(f"  🎯 Exploration Bonus: ${current_exploration_bonus:.2f} (decays to $0 at {exploration_horizon:,.0f} steps)")
+            if current_floor > 0.0:
+                print(f"  🎯 Action Floor: {current_floor:.1%} min probability for BUY/SELL (guarantees ~{current_floor*2:.0%} trading)")
             print(f"  Mean episode return: {episode_returns.mean():.2f}")
             print(f"  Policy loss: {train_metrics['policy_loss']:.4f}")
             print(f"  Value loss: {train_metrics['value_loss']:.4f}")
             print(f"  Entropy: {train_metrics['entropy']:.4f}")
+
+            # PHASE A: Earlier entropy intervention with higher max coefficient
+            # Trigger threshold: 0.15 → 0.25 (earlier detection)
+            # Max ent_coef: 0.30 → 0.50 (stronger intervention)
+            if current_entropy < 0.25:
+                # Entropy collapsing - increase coefficient more aggressively
+                new_ent_coef = min(config.ent_coef * 1.5, 0.50)
+                config = config._replace(ent_coef=new_ent_coef)
+                print(f"  ⚠️  Entropy low ({current_entropy:.3f}) - increasing ent_coef to {new_ent_coef:.3f}")
+            elif current_entropy > 0.40:
+                # Entropy too high (unfocused policy) - decrease
+                new_ent_coef = max(config.ent_coef * 0.95, 0.05)
+                config = config._replace(ent_coef=new_ent_coef)
+                print(f"  ℹ️  Entropy high ({current_entropy:.3f}) - decreasing ent_coef to {new_ent_coef:.3f}")
+
             print(f"  Approx KL: {train_metrics['approx_kl']:.4f}")
             
-            metrics_history.append({
-                'update': update + 1,
-                'timesteps': timesteps,
-                'sps': sps,
-                'mean_return': float(episode_returns.mean()),
-                **{k: float(v) for k, v in train_metrics.items()}
-            })
+            # NEW: Phase B2 - Action distribution monitoring
+            print(f"  Action dist: HOLD {action_dist[0]:.1%} | BUY {action_dist[1]:.1%} | SELL {action_dist[2]:.1%}")
+            if action_dist[0] > 0.95:
+                print(f"  ⚠️  HOLD-dominated policy detected! Consider increasing exploration.")
+
+            # NEW: Log metrics tracker summary (Phase 2 integration)
+            tracker.log_summary()
+            
+            # NEW: Phase C - Quality monitoring and adaptive adjustments (every 20 updates)
+            if (update + 1) % 20 == 0:
+                # Update quality monitor with current metrics
+                quality_metrics = {
+                    'entropy': current_entropy,
+                    'trades': tracker.trades_last_update if hasattr(tracker, 'trades_last_update') else 0,
+                    'win_rate': tracker.win_rate if hasattr(tracker, 'win_rate') else 0.0,
+                    'mean_return': float(episode_returns.mean()),
+                    'action_dist': action_dist
+                }
+                quality_score = quality_monitor.update(quality_metrics)
+                
+                print(f"\n🔍 Quality Check (Update {update + 1}):")
+                print(f"  Quality Score: {quality_score:.2f}/1.00")
+                
+                # Check if adaptive intervention needed
+                if quality_monitor.should_adjust():
+                    recommendations = quality_monitor.get_recommendations()
+                    print(f"  ⚙️  Auto-adjustments triggered:")
+                    for rec in recommendations:
+                        print(f"     • {rec.replace('_', ' ').title()}")
+                    
+                    # Apply adjustments (AUTO-APPLY enabled per user request)
+                    result = hyperparameter_adjuster.apply(
+                        config, env_params, recommendations, update + 1
+                    )
+                    config = result['config']
+                    env_params = result['env_params']
+                    curriculum_slowdown_active = result['curriculum_slowdown']
+                    
+                    # Log applied adjustments
+                    for adjustment in result['adjustments']:
+                        print(f"     ✓ {adjustment}")
+                    
+                    if curriculum_slowdown_active:
+                        print(f"     ✓ Commission curriculum slowed (0.5x progress multiplier)")
+                else:
+                    status = quality_monitor.get_status_summary()
+                    print(f"  ✅ Training healthy - no adjustments needed")
+                    print(f"     Avg entropy: {status['avg_entropy']:.3f} | Avg trades: {status['avg_trades']:.1f}")
+                print()  # Blank line for readability
+
+        # Persist metrics frequently for dashboard (every 5 updates)
+        if (update + 1) % 5 == 0 or (update + 1) == num_updates:
+            tracker.save_metrics()
+
+        metrics_history.append({
+            'update': update + 1,
+            'timesteps': timesteps,
+            'sps': sps,
+            'mean_return': float(episode_returns.mean()),
+            **{k: float(v) for k, v in train_metrics.items()}
+        })
     
     total_time = time.time() - start_time
     print(f"\nTraining complete!")
@@ -679,6 +930,20 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, required=True, help="Path to market data CSV file")
     parser.add_argument("--checkpoint_dir", type=str, default="models/phase1_jax", help="Directory to save checkpoints")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    # NEW: Hyperparameter arguments (Phase 1B improvements)
+    parser.add_argument('--ent_coef', type=float, default=0.15,
+                       help='Entropy coefficient (default: 0.15, was 0.05)')
+    parser.add_argument('--initial_lr', type=float, default=3e-4,
+                       help='Initial learning rate')
+    parser.add_argument('--final_lr', type=float, default=1e-4,
+                       help='Final learning rate (for annealing)')
+    parser.add_argument('--lr_annealing', action='store_true',
+                       help='Enable learning rate annealing')
+    parser.add_argument('--data_filter', type=str, default=None,
+                       choices=['high_volatility', 'trending', 'ranging'],
+                       help='Filter training data by market conditions')
+
     args = parser.parse_args()
     
     # Validate arguments
@@ -690,7 +955,7 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Data file not found: {args.data_path}")
     
     # Create checkpoint directory
-    checkpoint_dir = Path(args.checkpoint_dir)
+    checkpoint_dir = Path(args.checkpoint_dir).resolve()
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     print(f"Checkpoint directory: {checkpoint_dir}")
     
@@ -702,28 +967,45 @@ if __name__ == "__main__":
     
     # Load real market data
     from .data_loader import load_market_data
-    
+
     # Infer second-level data path from minute data path
     data_path = Path(args.data_path)
     second_data_path = data_path.parent / data_path.name.replace('_D1M.csv', '_D1S.csv')
-    
+
+    # TODO (Phase 3): Add data filtering support via data_filter.py
+    # For now, --data_filter argument is accepted but not yet implemented
+    # Future: Filter by high_volatility, trending, or ranging markets
+    if args.data_filter:
+        print(f"Note: Data filtering ({args.data_filter}) is not yet implemented in JAX pipeline")
+        print(f"  This will be added in a future update")
+
     data = load_market_data(
         args.data_path,
         second_data_path=str(second_data_path) if second_data_path.exists() else None
     )
     
-    # Configuration with command-line arguments
+    # Configuration with command-line arguments (with Phase 1B improvements)
     config = PPOConfig(
         num_envs=args.num_envs,
         num_steps=128,
         total_timesteps=args.total_timesteps,
         normalize_obs=True,
+        ent_coef=args.ent_coef,  # NEW: configurable entropy (default 0.15)
+        learning_rate=args.initial_lr,  # NEW: use initial_lr
+        anneal_lr=args.lr_annealing,  # NEW: enable LR annealing if flag set
     )
     
-    env_params = EnvParams()
+    env_params = EnvParams(
+        rth_start_count=int(data.rth_indices.shape[0])
+    )
     
-    # Train with real data
-    trained_state, normalizer, metrics = train(config, env_params, data, seed=args.seed)
+    # Train with real data (with Phase 2 metrics tracker integration)
+    trained_state, normalizer, metrics = train(
+        config, env_params, data,
+        seed=args.seed,
+        market=args.market,
+        checkpoint_dir=str(checkpoint_dir)
+    )
     
     print(f"\nFinal metrics:")
     if metrics:
@@ -776,5 +1058,3 @@ if __name__ == "__main__":
     print(f"  ✓ Saved metadata to {metadata_path.name}")
     
     print(f"\n✅ Phase 1 training complete! Models saved in {checkpoint_dir}/")
-
-

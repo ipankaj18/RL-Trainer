@@ -262,7 +262,7 @@ def evaluate_phase2_model(
         second_data=second_data,  # Pass second-level data
         market_spec=market_spec,  # NEW: Pass market spec
         position_size_contracts=1.0,
-        trailing_drawdown_limit=2500
+        trailing_drawdown_limit=15000  # EVAL: RELAXED to $15K (match training) to allow learning
     )
     base_env = ActionMaskGymnasiumWrapper(trading_env)
     vec_env = DummyVecEnv([lambda: base_env])

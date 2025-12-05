@@ -96,6 +96,26 @@ class EnvParamsPhase2:
     trail_activation_mult: float = 1.0    # Activate trail after 1R profit
     trail_distance_atr: float = 1.0       # Trail distance in ATR multiples
     be_min_profit_atr: float = 0.5        # Min profit to move SL to BE
+    
+    # Commission curriculum (ported from Phase 1 - solves HOLD trap)
+    initial_commission: float = 1.0       # Start with reduced commission
+    final_commission: float = 2.5         # End with realistic commission
+    commission_curriculum: bool = True    # Enable commission ramping
+    training_progress: float = 0.0        # 0.0 to 1.0, updated each rollout
+    
+    # Exploration bonus curriculum (ported from Phase 1 - critical for trades)
+    current_global_timestep: float = 0.0          # Global timestep counter
+    total_training_timesteps: float = 100_000_000 # Total timesteps for exploration decay
+    
+    # Forced position curriculum (NEW - solves chicken-and-egg problem)
+    # Phase 2A: Start with forced positions to guarantee PM experiences
+    forced_position_ratio: float = 0.0     # 0.0 = no forced, 0.5 = 50% start with position
+    forced_position_profit_range: float = 1.0  # Random unrealized P/L range in ATR multiples
+    
+    # Enhanced PM exploration bonus (INCREASED from $200 to $400)
+    # PM actions are completely novel - need higher bonus than entry actions
+    pm_action_exploration_bonus: float = 400.0   # Base bonus for MOVE_SL, ENABLE_TRAIL
+    entry_action_exploration_bonus: float = 300.0  # Base bonus for BUY/SELL
 
 
 # =============================================================================
@@ -349,29 +369,215 @@ def validate_pm_action(
     return valid
 
 
+def get_curriculum_commission_phase2(params: EnvParamsPhase2) -> jnp.ndarray:
+    """
+    Commission curriculum for Phase 2 (ported from Phase 1).
+    
+    Linearly interpolates commission over training:
+    - First 25%: Ultra-low commission ($0.25) for easy learning
+    - Remaining 75%: Ramps from $1.00 to $2.50
+    
+    Returns:
+        Commission value based on training progress
+    """
+    progress = params.training_progress
+    
+    # Case 1: First 25% - ultra-low commission
+    ultra_low_commission = params.initial_commission * 0.25  # $0.25 per side
+    
+    # Case 2: Remaining 75% - ramping commission
+    adjusted_progress = (progress - 0.25) / 0.75
+    ramp_progress = jnp.minimum(1.0, adjusted_progress * 2.0)
+    ramped_commission = params.initial_commission + \
+                       (params.final_commission - params.initial_commission) * ramp_progress
+    
+    # Select based on progress using jnp.where (JAX-compatible)
+    curriculum_commission = jnp.where(
+        progress < 0.25,
+        ultra_low_commission,
+        ramped_commission
+    )
+    
+    # Select based on curriculum flag
+    return jnp.where(
+        params.commission_curriculum,
+        curriculum_commission,
+        params.commission
+    )
+
+
+def calculate_reward_phase2(
+    trade_pnl: jnp.ndarray,
+    portfolio_value: jnp.ndarray,
+    position_closed: jnp.ndarray,
+    closed_pnl: jnp.ndarray,
+    opening_any: jnp.ndarray,
+    moving_to_be: jnp.ndarray,
+    enabling_trail: jnp.ndarray,
+    disabling_trail: jnp.ndarray,
+    unrealized_pnl: jnp.ndarray,
+    dd_violation: jnp.ndarray,
+    time_violation: jnp.ndarray,
+    had_trailing: jnp.ndarray,
+    params: EnvParamsPhase2
+) -> jnp.ndarray:
+    """
+    Phase 2 reward function with exploration bonus curriculum.
+    
+    Ported from Phase 1 to solve HOLD trap issue.
+    
+    Exploration Bonus (for trading):
+    - Entry actions (BUY/SELL): $300 bonus, decaying over first 30% of training
+    - PM actions (MOVE_SL_TO_BE, ENABLE_TRAIL): $200 bonus
+    - This encourages the agent to try trading early in training
+    
+    Regular Rewards:
+    - Trade completion: +2.0 win, -1.0 loss
+    - Trailing usage bonus: +0.5 if won with trailing
+    - Portfolio signal: 20x scaled percentage return
+    - Violation penalty: -10.0 for Apex violations
+    """
+    # ===== EXPLORATION BONUS CURRICULUM (CRITICAL FIX) =====
+    # This solves the HOLD trap by incentivizing early trades
+    # PM actions get HIGHER bonus than entries - they're completely novel!
+    exploration_horizon = params.total_training_timesteps * 0.30  # 30% of training
+    
+    # Handle None case for timestep (JAX-compatible)
+    current_ts = jnp.array(params.current_global_timestep)
+    exploration_progress = current_ts / exploration_horizon
+    
+    # Entry bonus: configurable (default $300), decaying over first 30% of training
+    base_entry_bonus = params.entry_action_exploration_bonus
+    entry_bonus = base_entry_bonus * jnp.maximum(0.0, 1.0 - exploration_progress)
+    scaled_entry_bonus = entry_bonus / 100.0  # Scale for reward
+    
+    # PM action bonus: configurable (default $400 - HIGHER than entries!)
+    # PM actions are completely novel - agent never experienced them in Phase 1
+    base_pm_bonus = params.pm_action_exploration_bonus
+    pm_bonus = base_pm_bonus * jnp.maximum(0.0, 1.0 - exploration_progress)
+    scaled_pm_bonus = pm_bonus / 100.0
+    
+    # Apply exploration bonuses
+    exploration_reward = jnp.where(opening_any, scaled_entry_bonus, 0.0)
+    exploration_reward = exploration_reward + jnp.where(moving_to_be, scaled_pm_bonus, 0.0)
+    exploration_reward = exploration_reward + jnp.where(enabling_trail, scaled_pm_bonus, 0.0)
+    
+    # ===== POSITION MANAGEMENT OUTCOME FEEDBACK =====
+    pm_reward = jnp.array(0.0)
+    
+    # Enable Trail Feedback
+    profit_threshold = params.initial_balance * 0.01
+    is_good_trail = unrealized_pnl > profit_threshold
+    pm_reward = pm_reward + jnp.where(enabling_trail & is_good_trail, 0.1, 0.0)
+    pm_reward = pm_reward + jnp.where(enabling_trail & ~is_good_trail, -0.1, 0.0)
+    
+    # ===== TRADE COMPLETION REWARD =====
+    trade_reward = jnp.array(0.0)
+    trade_reward = trade_reward + jnp.where(position_closed & (closed_pnl > 0), 2.0, 0.0)
+    trade_reward = trade_reward + jnp.where(position_closed & (closed_pnl <= 0), -1.0, 0.0)
+    
+    # Bonus: Successful trailing usage
+    trade_reward = trade_reward + jnp.where(position_closed & (closed_pnl > 0) & had_trailing, 0.5, 0.0)
+    
+    # ===== PORTFOLIO VALUE SIGNAL =====
+    pnl_pct = (portfolio_value - params.initial_balance) / params.initial_balance
+    portfolio_reward = pnl_pct * 20.0
+    
+    # ===== PENALTIES =====
+    violation_penalty = jnp.where(dd_violation | time_violation, -10.0, 0.0)
+    
+    # ===== COMBINE ALL COMPONENTS =====
+    reward = exploration_reward + pm_reward + trade_reward + portfolio_reward + violation_penalty
+    
+    # Clip for stability
+    reward = jnp.clip(reward, -10.0, 10.0)
+    
+    return reward
+
+
 def reset_phase2(
     key: jax.random.PRNGKey,
     params: EnvParamsPhase2,
     data: MarketData
 ) -> Tuple[jnp.ndarray, EnvStatePhase2]:
-    """Reset Phase 2 environment to initial state with RTH-aligned start."""
-    # Sample from pre-computed RTH indices instead of full range
-    # This ensures episodes start during regular trading hours (9:30 AM - 4:00 PM ET)
+    """
+    Reset Phase 2 environment to initial state with RTH-aligned start.
+    
+    NEW: Supports forced position initialization for Phase 2A curriculum.
+    When forced_position_ratio > 0, some episodes start with a synthetic
+    pre-existing position to guarantee position management experiences.
+    """
+    # Split keys for different random operations
+    key, key_start, key_force, key_direction, key_profit = jax.random.split(key, 5)
+    
+    # Sample episode start from pre-computed RTH indices
     num_rth_indices = data.rth_indices.shape[0]
-    idx_choice = jax.random.randint(key, shape=(), minval=0, maxval=num_rth_indices)
-    episode_start = data.rth_indices[idx_choice]
+    idx_choice = jax.random.randint(key_start, shape=(), minval=0, maxval=num_rth_indices)
+    episode_start = jnp.take(data.rth_indices, idx_choice)
+    
+    # Determine if this episode starts with a forced position
+    should_force_position = jax.random.uniform(key_force) < params.forced_position_ratio
+    
+    # Get current market data for forced position
+    current_price = data.prices[episode_start, 3]
+    current_atr = data.atr[episode_start]
+    safe_atr = jnp.where(current_atr > 0, current_atr, current_price * 0.01)
+    
+    # Random direction: 1 (long) or -1 (short)
+    direction = jnp.where(
+        jax.random.uniform(key_direction) > 0.5,
+        jnp.array(1, dtype=jnp.int32),
+        jnp.array(-1, dtype=jnp.int32)
+    )
+    
+    # Create synthetic entry price (simulate entering 5-20 bars ago)
+    # Entry is slightly offset from current price to create unrealized P/L
+    profit_offset = (jax.random.uniform(key_profit) * 2 - 1) * safe_atr * params.forced_position_profit_range
+    # For long: if profitable, entry was below current price
+    # For short: if profitable, entry was above current price
+    forced_entry = jnp.where(
+        direction == 1,
+        current_price - profit_offset,  # Long: entry below current = profit
+        current_price + profit_offset   # Short: entry above current = profit
+    )
+    
+    # Calculate SL/TP for forced position
+    sl_distance = safe_atr * params.sl_atr_mult
+    tp_distance = sl_distance * params.tp_sl_ratio
+    
+    forced_sl = jnp.where(
+        direction == 1,
+        forced_entry - sl_distance,  # Long: SL below entry
+        forced_entry + sl_distance   # Short: SL above entry
+    )
+    forced_tp = jnp.where(
+        direction == 1,
+        forced_entry + tp_distance,  # Long: TP above entry
+        forced_entry - tp_distance   # Short: TP below entry
+    )
+    
+    # Final position values (use forced or flat based on should_force_position)
+    final_position = jnp.where(should_force_position, direction, jnp.array(0, dtype=jnp.int32))
+    final_entry = jnp.where(should_force_position, forced_entry, 0.0)
+    final_sl = jnp.where(should_force_position, forced_sl, 0.0)
+    final_tp = jnp.where(should_force_position, forced_tp, 0.0)
+    final_entry_step = jnp.where(
+        should_force_position, 
+        episode_start - 10,  # Simulate entered 10 bars ago
+        jnp.array(0, dtype=jnp.int32)
+    )
     
     state = EnvStatePhase2(
         step_idx=episode_start,
-        position=jnp.array(0, dtype=jnp.int32),
-        entry_price=jnp.array(0.0, dtype=jnp.float32),
-        sl_price=jnp.array(0.0, dtype=jnp.float32),
-        tp_price=jnp.array(0.0, dtype=jnp.float32),
-        position_entry_step=jnp.array(0, dtype=jnp.int32),
+        position=final_position,
+        entry_price=jnp.array(final_entry, dtype=jnp.float32),
+        sl_price=jnp.array(final_sl, dtype=jnp.float32),
+        tp_price=jnp.array(final_tp, dtype=jnp.float32),
+        position_entry_step=jnp.array(final_entry_step, dtype=jnp.int32),
         balance=jnp.array(params.initial_balance, dtype=jnp.float32),
         highest_balance=jnp.array(params.initial_balance, dtype=jnp.float32),
         trailing_dd_level=jnp.array(params.initial_balance - params.trailing_dd_limit, dtype=jnp.float32),
-        num_trades=jnp.array(0, dtype=jnp.int32),
+        num_trades=jnp.where(should_force_position, jnp.array(1, dtype=jnp.int32), jnp.array(0, dtype=jnp.int32)),
         winning_trades=jnp.array(0, dtype=jnp.int32),
         losing_trades=jnp.array(0, dtype=jnp.int32),
         total_pnl=jnp.array(0.0, dtype=jnp.float32),
@@ -380,7 +586,7 @@ def reset_phase2(
         trailing_stop_active=jnp.array(False, dtype=jnp.bool_),
         highest_profit_point=jnp.array(0.0, dtype=jnp.float32),
         be_move_count=jnp.array(0, dtype=jnp.int32),
-        original_sl_price=jnp.array(0.0, dtype=jnp.float32),
+        original_sl_price=jnp.array(final_sl, dtype=jnp.float32),
         trail_activation_price=jnp.array(0.0, dtype=jnp.float32),
     )
     
@@ -438,10 +644,11 @@ def step_phase2(
     
     exit_price = jnp.where(sl_hit, state.sl_price, jnp.where(tp_hit, state.tp_price, 0.0))
     
-    # Calculate PnL
+    # Calculate PnL with curriculum commission
+    curriculum_comm = get_curriculum_commission_phase2(params)
     pnl_long = (exit_price - state.entry_price) * params.contract_size * params.position_size
     pnl_short = (state.entry_price - exit_price) * params.contract_size * params.position_size
-    closed_pnl = jnp.where(state.position == 1, pnl_long, pnl_short) - params.commission * 2 * params.position_size
+    closed_pnl = jnp.where(state.position == 1, pnl_long, pnl_short) - curriculum_comm * 2 * params.position_size
     
     trade_pnl = jnp.where(position_closed, closed_pnl, 0.0)
     exit_type = jnp.where(tp_hit & position_closed, 2, jnp.where(sl_hit & position_closed, 1, 0))
@@ -473,7 +680,7 @@ def step_phase2(
     )
     forced_pnl_long = (forced_exit_price - entry_after) * params.contract_size * params.position_size
     forced_pnl_short = (entry_after - forced_exit_price) * params.contract_size * params.position_size
-    forced_pnl = jnp.where(position_after == 1, forced_pnl_long, forced_pnl_short) - params.commission * 2 * params.position_size
+    forced_pnl = jnp.where(position_after == 1, forced_pnl_long, forced_pnl_short) - curriculum_comm * 2 * params.position_size
     
     trade_pnl = jnp.where(forced_close, forced_pnl, trade_pnl)
     balance_after = balance_after + jnp.where(forced_close, forced_pnl, 0.0)
@@ -568,62 +775,26 @@ def step_phase2(
     done = dd_violation | end_of_data | time_violation
     
     # =========================================================================
-    # 7. CALCULATE REWARD (Apex-Optimized Parity)
+    # 7. CALCULATE REWARD (with Exploration Bonus Curriculum)
     # =========================================================================
-    # Ported from environment_phase2.py _calculate_apex_reward
-    
-    # 1. Position Management Outcome-based Feedback
-    # ---------------------------------------------------------
-    pm_reward = 0.0
-    
-    # Enable Trail Feedback
-    # Good: Unrealized PnL > 1% of balance (good timing)
-    # Bad: Unrealized PnL <= 1% (too early)
-    profit_threshold = params.initial_balance * 0.01
-    is_good_trail = unrealized_pnl > profit_threshold
-    
-    pm_reward += jnp.where(enabling_trail & is_good_trail, 0.1, 0.0)
-    pm_reward += jnp.where(enabling_trail & ~is_good_trail, -0.1, 0.0)
-    
-    # Disable Trail Feedback (Neutral)
-    # Move to BE Feedback (Neutral/Slight Positive handled in action mask/bonus)
-    
-    # 2. Trade Completion Reward
-    # ---------------------------------------------------------
-    # Stronger signals: Win=+2.0, Loss=-1.0
-    trade_reward = 0.0
-    trade_reward += jnp.where(position_closed & (closed_pnl > 0), 2.0, 0.0)
-    trade_reward += jnp.where(position_closed & (closed_pnl <= 0), -1.0, 0.0)
-    
-    # Bonus: Successful trailing usage
-    # If trade won AND trailing was active (or just activated), give bonus
+    # Use new reward function with exploration bonus to solve HOLD trap
     had_trailing = state.trailing_stop_active | enabling_trail
-    trade_reward += jnp.where(position_closed & (closed_pnl > 0) & had_trailing, 0.5, 0.0)
     
-    # 3. Portfolio Value Signal (Scaled)
-    # ---------------------------------------------------------
-    # 20x scaling on percentage return
-    pnl_pct = (portfolio_value - params.initial_balance) / params.initial_balance
-    portfolio_reward = pnl_pct * 20.0
-    
-    # 4. Penalties
-    # ---------------------------------------------------------
-    # Invalid action penalty (handled in step function return if invalid, but here for valid actions that are bad)
-    # We already have action masks, so we don't need to penalize invalid actions here again
-    # But we do penalize violations
-    violation_penalty = jnp.where(dd_violation | time_violation, -10.0, 0.0) # Apex violation is severe
-    
-    # 5. BE Move Bonus (Neutral/Slight Positive handled in action mask/bonus)
-    # PyTorch implementation sets this to 0.0
-    be_move_bonus = 0.0
-    
-    # Combine all components
-    reward = pm_reward + trade_reward + portfolio_reward + violation_penalty + be_move_bonus
-    
-    # Clip for stability (though portfolio reward might exceed this, so maybe relax clip or clip only components)
-    # PyTorch implementation doesn't explicitly clip total reward, but PPO usually likes clipped rewards.
-    # However, portfolio signal is continuous. Let's clip to [-10, 10] to be safe but allow strong signals.
-    reward = jnp.clip(reward, -10.0, 10.0)
+    reward = calculate_reward_phase2(
+        trade_pnl=trade_pnl,
+        portfolio_value=portfolio_value,
+        position_closed=position_closed,
+        closed_pnl=closed_pnl,
+        opening_any=opening_any,
+        moving_to_be=moving_to_be,
+        enabling_trail=enabling_trail,
+        disabling_trail=disabling_trail,
+        unrealized_pnl=unrealized_pnl,
+        dd_violation=dd_violation,
+        time_violation=time_violation,
+        had_trailing=had_trailing,
+        params=params
+    )
     
     # =========================================================================
     # 8. CREATE NEW STATE
@@ -675,7 +846,6 @@ def step_phase2(
 # Vectorized Wrappers
 # =============================================================================
 
-@partial(jax.jit, static_argnums=(1, 2))
 def batch_reset_phase2(
     keys: jax.random.PRNGKey,
     params: EnvParamsPhase2,
@@ -683,7 +853,6 @@ def batch_reset_phase2(
     data: MarketData
 ) -> Tuple[jnp.ndarray, EnvStatePhase2]:
     """Reset multiple Phase 2 environments in parallel."""
-    keys = jax.random.split(keys, num_envs)
     return jax.vmap(reset_phase2, in_axes=(0, None, None))(keys, params, data)
 
 
@@ -764,7 +933,12 @@ if __name__ == "__main__":
     
     # Test vectorized
     num_envs = 1000
-    obs_batch, state_batch = batch_reset_phase2(key, params, num_envs, dummy_data)
+    obs_batch, state_batch = batch_reset_phase2(
+        jax.random.split(key, num_envs),
+        params,
+        num_envs,
+        dummy_data
+    )
     print(f"\nVectorized reset ({num_envs} envs):")
     print(f"  Observation batch shape: {obs_batch.shape}")
     

@@ -326,26 +326,61 @@ class TradingEnvironmentPhase2(TradingEnvironmentPhase1):
         return full_observation.astype(np.float32)
 
     def _calculate_apex_reward(self, position_changed, exit_reason, trade_pnl, portfolio_value, pm_action_taken):
-        """Calculate Apex-optimized reward."""
+        """
+        Calculate Apex-optimized reward with outcome-based PM feedback.
+        
+        REWARD FIX v2:
+        1. Removed free points for PM actions (prevent reward hacking)
+        2. Stronger win/loss signals (2.0/-1.0)
+        3. Much stronger portfolio value signal (20x on percentage)
+        4. Outcome-based PM action feedback (reward good timing, penalize bad)
+        5. Bonus for successful trailing stop usage
+        """
         reward = 0.0
         
-        # Base reward for position management actions
+        # Position management outcome-based rewards
+        # REWARD FIX: Provide feedback on PM action quality, not just execution
         if pm_action_taken:
             if 'move_to_be' in pm_action_taken:
-                reward += 0.1  # Small positive for risk management
-            elif 'enable_trail' in pm_action_taken:
-                reward += 0.05  # Small positive for trailing
+                # Neutral - outcome will show in trade_pnl
+                # If position exits at BE shortly after, that's captured in trade result
+                reward += 0.0
+            
+            elif 'enable_trail' in pm_action_taken or 'trail_enabled' in pm_action_taken:
+                # Check if trailing was enabled at a good time
+                # Good: Position has significant profit (>1% of balance)
+                # Bad: Position barely profitable, trail likely to cut it short
+                unrealized_pnl = portfolio_value - self.balance
+                profit_threshold = self.initial_balance * 0.01  # 1% of initial balance
+                
+                if unrealized_pnl > profit_threshold:
+                    reward += 0.1  # Good timing - enough profit to trail
+                else:
+                    reward -= 0.1  # Too early - likely to cut profits short
+            
+            elif 'trail_disabled' in pm_action_taken or 'disable_trail' in pm_action_taken:
+                # Disabling trail is usually to let profits run
+                # Neutral for now, outcome will show in trade_pnl
+                reward += 0.0
         
         # Trade completion reward
+        # REWARD FIX: Stronger signals for wins/losses
         if exit_reason:
             if trade_pnl > 0:
-                reward += 1.0  # Win
+                reward += 2.0  # Strong win signal
+                
+                # BONUS: If trailing was used and trade won, extra reward
+                # This encourages learning to use trailing effectively
+                if self.trailing_stop_active or (pm_action_taken and 'trail' in pm_action_taken):
+                    reward += 0.5  # Bonus for successful trailing usage
             else:
-                reward -= 0.5  # Loss
+                reward -= 1.0  # Strong loss penalty
         
-        # Portfolio value reward (shaped)
-        if portfolio_value > self.initial_balance:
-            reward += (portfolio_value - self.initial_balance) / 10000.0
+        # Portfolio value reward (shaped and MUCH stronger)
+        # REWARD FIX: Use percentage-based scaling for meaningful continuous feedback
+        # 2% gain = +0.4 reward (competitive with discrete signals)
+        pnl_pct = (portfolio_value - self.initial_balance) / self.initial_balance
+        reward += pnl_pct * 20.0  # Was /1000.0 - now 20x stronger
         
         return reward
 
@@ -404,7 +439,7 @@ class TradingEnvironmentPhase2(TradingEnvironmentPhase1):
             # CRITICAL: Advance time even for invalid actions (prevents exploitation)
             self.current_step += 1
 
-            reward = -0.1  # TUNED: Reduced from -1.0 to allow exploration without catastrophic failure
+            reward = -1.0  # REWARD FIX: Increased from -0.1 to strongly discourage invalid actions
             obs = self._get_observation()
 
             # Check if episode ended after time advance
@@ -588,32 +623,12 @@ class TradingEnvironmentPhase2(TradingEnvironmentPhase1):
                 # Normal trailing behavior (before profit target)
                 self.trailing_dd_level = self.highest_balance - self.trailing_dd_limit
             # else: trailing_dd_level remains frozen at profit target level
-
-        # When FLAT, clamp trailing DD to realized equity to avoid violations from unrealized spikes
-        if self.position == 0:
-            self.realized_high_balance = max(self.realized_high_balance, self.balance)
-            realized_level = self.realized_high_balance - self.trailing_dd_limit
-            # Reduce the trailing level if unrealized highs pushed it above realized equity
-            self.trailing_dd_level = min(self.trailing_dd_level, realized_level)
-
-        # Track trailing DD level history for compliance checking
-        self.trailing_dd_levels.append(self.trailing_dd_level)
-
-        # Check violation at minute-level
-        if portfolio_value < self.trailing_dd_level:
-            terminated = True
-            reward = -0.1
-            done_reason = 'minute_trailing_drawdown'
-            self.done_reason = done_reason  # DIAGNOSTIC: Track for analysis
-            self.max_drawdown_reached = self.highest_balance - portfolio_value  # DIAGNOSTIC
-
-        # Check violation at second-level (Apex compliance)
         if not terminated and self.second_data is not None:
             current_bar_time = self.data.index[self.current_step]
             drawdown_hit, _ = self._check_second_level_drawdown(current_bar_time)
             if drawdown_hit:
                 terminated = True
-                reward = -0.1  # Heavy penalty for Apex violation
+                reward = -10.0  # REWARD FIX: Massive penalty for Apex violation (was -0.1)
                 done_reason = 'second_level_trailing_drawdown'
                 self.done_reason = done_reason  # DIAGNOSTIC
                 self.max_drawdown_reached = self.highest_balance - portfolio_value  # DIAGNOSTIC

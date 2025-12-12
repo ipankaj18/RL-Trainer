@@ -1,0 +1,90 @@
+
+============================================================
+2025-12-12T18:31:04.893219 - JAX Phase 2 Evaluation
+Command: /usr/bin/python /workspace/src/jax_migration/evaluate_phase2_jax.py --model-path /workspace/models/phase2_jax_nq/phase2_jax_final_3051 --data-path-1m /workspace/data/NQ_D1M_test.csv --market NQ --episodes 50 --data-path-1s /workspace/data/NQ_D1S_test.csv
+Return Code: 0
+Output:
+W1212 18:29:31.542676   20193 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 18:29:31.545829   19806 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+/workspace/src/jax_migration/data_loader.py:148: DtypeWarning: Columns (30,31,32,33,46) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+/workspace/src/jax_migration/data_loader.py:183: DtypeWarning: Columns (9) have mixed types. Specify dtype option on import or set low_memory=False.
+  df_s = pd.read_csv(second_data_path, index_col=0, parse_dates=True)
+WARNING:absl:The transformations API will eventually be replaced by an upgraded design. The current API will not be removed until this point, but it will no longer be actively worked on.
+[36mJAX Devices: [CudaDevice(id=0)][0m
+[36mEvaluation mode: deterministic[0m
+[32mUsing 3% probability floor on BUY/SELL to prevent HOLD trap[0m
+[36mMode: 50 EPISODES (random RTH starts)[0m
+[36mLoading fresh data...[0m
+Loading minute data from /workspace/data/NQ_D1M_test.csv...
+Loading second-level data from /workspace/data/NQ_D1S_test.csv...
+  Second-level data integrated successfully.
+  RTH indices computed: 19985 valid start points
+Loaded 26682 bars of data.
+[32mUsing NQ contract specs: $20.0/point, tick=0.25[0m
+Loading checkpoint from /workspace/models/phase2_jax_nq/phase2_jax_final_3051...
+Loading normalizer from /workspace/models/phase2_jax_nq/normalizer_final.pkl
+[36mStarting evaluation: 50 episodes across 50 envs...[0m
+Evaluating episodes:   0%|                                                                                                                                             | 0/50 [00:00<?, ?it/s]
+Evaluating episodes:   2%|██▋                                                                                                                                  | 1/50 [00:14<11:43, 14.35s/it]
+Evaluating episodes:   4%|█████▎                                                                                                                               | 2/50 [00:18<06:53,  8.62s/it]
+Evaluating episodes:   6%|███████▉                                                                                                                             | 3/50 [00:21<04:38,  5.92s/it]
+Evaluating episodes:   8%|██████████▋                                                                                                                          | 4/50 [00:22<02:54,  3.80s/it]
+Evaluating episodes:  10%|█████████████▎                                                                                                                       | 5/50 [00:26<03:06,  4.15s/it]
+Evaluating episodes:  12%|███████████████▉                                                                                                                     | 6/50 [00:27<02:09,  2.94s/it]
+Evaluating episodes:  14%|██████████████████▌                                                                                                                  | 7/50 [00:29<01:58,  2.75s/it]
+Evaluating episodes:  16%|█████████████████████▎                                                                                                               | 8/50 [00:31<01:37,  2.31s/it]
+Evaluating episodes:  18%|███████████████████████▉                                                                                                             | 9/50 [00:31<01:06,  1.62s/it]
+Evaluating episodes:  20%|██████████████████████████▍                                                                                                         | 10/50 [00:35<01:30,  2.25s/it]
+Evaluating episodes:  22%|█████████████████████████████                                                                                                       | 11/50 [00:35<01:03,  1.64s/it]
+Evaluating episodes:  24%|███████████████████████████████▋                                                                                                    | 12/50 [00:35<00:48,  1.28s/it]
+Evaluating episodes:  28%|████████████████████████████████████▉                                                                                               | 14/50 [00:36<00:29,  1.20it/s]
+Evaluating episodes:  30%|███████████████████████████████████████▌                                                                                            | 15/50 [00:38<00:42,  1.21s/it]
+Evaluating episodes:  32%|██████████████████████████████████████████▏                                                                                         | 16/50 [00:39<00:40,  1.19s/it]
+Evaluating episodes:  34%|████████████████████████████████████████████▉                                                                                       | 17/50 [00:40<00:32,  1.02it/s]
+Evaluating episodes:  36%|███████████████████████████████████████████████▌                                                                                    | 18/50 [00:40<00:26,  1.22it/s]
+Evaluating episodes:  38%|██████████████████████████████████████████████████▏                                                                                 | 19/50 [00:41<00:22,  1.36it/s]
+Evaluating episodes:  40%|████████████████████████████████████████████████████▊                                                                               | 20/50 [00:43<00:37,  1.25s/it]
+Evaluating episodes:  42%|███████████████████████████████████████████████████████▍                                                                            | 21/50 [00:44<00:33,  1.14s/it]
+Evaluating episodes:  44%|██████████████████████████████████████████████████████████                                                                          | 22/50 [00:45<00:31,  1.13s/it]
+Evaluating episodes:  46%|████████████████████████████████████████████████████████████▋                                                                       | 23/50 [00:49<00:53,  1.97s/it]
+Evaluating episodes:  46%|████████████████████████████████████████████████████████████▋                                                                       | 23/50 [00:49<00:58,  2.17s/it]
+[36m[DEBUG] Initial action mask validity (across 50 envs):[0m
+  HOLD: 50/50 valid
+  BUY: 50/50 valid
+  SELL: 50/50 valid
+  SL→BE: 0/50 valid
+  TRAIL+: 0/50 valid
+  TRAIL-: 0/50 valid
+[DEBUG] Env 23 terminated at step 66: RTH CLOSE (time_violation)
+[DEBUG] Env 30 terminated at step 82: RTH CLOSE (time_violation)
+[1m═══ Evaluation Results ═══[0m
+[1mCoverage:[0m
+  Vector Steps: 500
+  Env Steps: 25,000 (50 envs)
+  Unique Bars: 14,965 / 26,682 (56.1%)
+  Episodes Completed: 23
+  Speed: 10.0 vec steps/sec (501.0 env steps/sec)
+  Elapsed: 49.9s
+Total Trades: 2233
+Win Rate: 54.6%
+Total PnL: $1249016.47
+Avg Win: $1405.40
+Avg Loss: $-459.60
+[1mAction Distribution:[0m
+  HOLD: 63.4% (15,845)
+  BUY: 11.5% (2,879)
+  SELL: 3.7% (913)
+  SL→BE: 4.1% (1,025)
+  TRAIL+: 12.2% (3,049)
+  TRAIL-: 5.2% (1,289)
+[1mApex Compliance:[0m
+  Max Drawdown (Peak-to-Valley): $4513.50 (Limit: $2500.00)
+  Min Margin (Dist to Floor): $282.00
+  Status: [32mPASS[0m
+[1mTermination Reasons:[0m
+  INTRA-BAR DD: 0
+  END-OF-BAR DD: 0
+  RTH CLOSE: 23
+  END OF DATA: 0
+[32mResults saved to results/evaluation[0m

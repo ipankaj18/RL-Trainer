@@ -33,6 +33,12 @@ from .training_metrics_tracker import TrainingMetricsTracker  # Phase 2 integrat
 from .training_quality_monitor import TrainingQualityMonitor  # NEW: Phase C integration
 from .hyperparameter_auto_adjuster import HyperparameterAutoAdjuster  # NEW: Phase C integration
 
+# Market specifications for correct contract values
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from src.market_specs import get_market_spec, MARKET_SPECS
+
 
 # =============================================================================
 # Observation Normalization
@@ -128,6 +134,9 @@ def masked_softmax(
     PHASE B: Minimum action probability floor prevents HOLD trap by guaranteeing
     minimum probability for BUY/SELL actions during exploration phase.
     
+    HOLD TRAP FIX (2025-12-07): Extended to support PM actions (3,4,5) in Phase 2.
+    Auto-detects Phase 2 via logits.shape[-1] == 6.
+    
     CRITICAL FIX: Uses jnp.where() instead of Python if/for to avoid
     TracerBoolConversionError when exploration_floor is traced inside JIT.
     """
@@ -146,6 +155,26 @@ def masked_softmax(
     floored_probs = floored_probs.at[..., 2].set(
         jnp.maximum(floored_probs[..., 2], exploration_floor)
     )
+    
+    # HOLD TRAP FIX (2025-12-07): Apply floor to PM actions for Phase 2 (6 actions)
+    # Phase 2 has actions: 0=HOLD, 1=BUY, 2=SELL, 3=SL→BE, 4=TRAIL+, 5=TRAIL-
+    # Auto-detect Phase 2 by checking if logits have 6 dimensions
+    is_phase2 = logits.shape[-1] == 6
+    
+    # Apply PM floor only in Phase 2 (use jnp.where for JAX compatibility)
+    pm_floor = jnp.where(is_phase2, exploration_floor, 0.0)
+    
+    # Apply floor to PM actions (indices 3, 4, 5)
+    floored_probs = floored_probs.at[..., 3].set(
+        jnp.where(is_phase2, jnp.maximum(floored_probs[..., 3], pm_floor), floored_probs[..., 3])
+    )
+    floored_probs = floored_probs.at[..., 4].set(
+        jnp.where(is_phase2, jnp.maximum(floored_probs[..., 4], pm_floor), floored_probs[..., 4])
+    )
+    floored_probs = floored_probs.at[..., 5].set(
+        jnp.where(is_phase2, jnp.maximum(floored_probs[..., 5], pm_floor), floored_probs[..., 5])
+    )
+    
     # Renormalize to ensure probabilities sum to 1.0
     floored_probs = floored_probs / floored_probs.sum(axis=-1, keepdims=True)
     
@@ -154,6 +183,8 @@ def masked_softmax(
     probs = jnp.where(exploration_floor > 0.0, floored_probs, probs)
 
     return probs
+
+
 
 
 def sample_action(
@@ -199,10 +230,10 @@ class PPOConfig(NamedTuple):
     num_steps: int = 128
     num_minibatches: int = 4
     num_epochs: int = 4
-    gamma: float = 0.99
+    gamma: float = 0.95  # Reduced from 0.99 for trading's shorter horizon
     gae_lambda: float = 0.95
     clip_eps: float = 0.15
-    ent_coef: float = 0.01
+    ent_coef: float = 0.05  # Increased from 0.01 to prevent entropy collapse/HOLD trap
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     learning_rate: float = 3e-4
@@ -393,7 +424,10 @@ def get_batched_observations(
     )(env_states)
 
 
-@partial(jax.jit, static_argnums=(1, 3, 4))  # env_params, num_steps, num_envs are static
+# MEMORY FIX (2025-12-08): Removed env_params (arg 1) from static_argnums
+# env_params changes every update due to curriculum values (training_progress,
+# exploration bonuses). Keeping it static caused JAX to recompile every iteration.
+@partial(jax.jit, static_argnums=(3, 4))  # Only num_steps and num_envs are truly static
 def collect_rollouts(
     runner_state: RunnerState,
     env_params: EnvParams,
@@ -710,11 +744,13 @@ def train(
         )
 
         # PHASE B: Calculate exploration floor (decays over training)
-        # Guarantees minimum 8% BUY and 8% SELL during first 40% of training
-        exploration_floor_horizon = config.total_timesteps * 0.40
+        # Guarantees minimum 8% BUY and 8% SELL probabilities
+        # FIXED: Decays over 100% of training (was 40%) and stops at 5% (was 0%)
+        exploration_floor_horizon = config.total_timesteps * 1.0
         floor_progress = min(1.0, current_global_timestep / exploration_floor_horizon)
-        base_floor = 0.08  # 8% minimum for BUY and SELL
-        current_floor = base_floor * max(0.0, 1.0 - floor_progress)
+        base_floor = 0.08    # Start at 8%
+        min_floor = 0.05     # Never go below 5%
+        current_floor = min_floor + (base_floor - min_floor) * max(0.0, 1.0 - floor_progress)
 
         # Collect rollouts with updated params (includes curriculum commission + exploration floor)
         transitions, runner_state, episode_returns, action_dist = collect_rollouts(
@@ -810,9 +846,10 @@ def train(
                 (env_params.final_commission - env_params.initial_commission) * min(1.0, progress * 2.0)
             
             # NEW: Phase 1B - Calculate exploration bonus for monitoring
-            exploration_horizon = config.total_timesteps * 0.40  # Match env_phase1_jax.py
+            # Updated to match env_phase1_jax.py ACTUAL values
+            exploration_horizon = config.total_timesteps * 1.0  # Decays over full run
             exploration_progress = current_global_timestep / exploration_horizon
-            current_exploration_bonus = 400.0 * max(0.0, 1.0 - exploration_progress)  # Match env_phase1_jax.py
+            current_exploration_bonus = 100.0 * max(0.0, 1.0 - exploration_progress)  # Match env base_bonus=100
             
             print(f"Update {update + 1}/{num_updates}")
             print(f"  Timesteps: {timesteps:,}")
@@ -904,6 +941,15 @@ def train(
             'mean_return': float(episode_returns.mean()),
             **{k: float(v) for k, v in train_metrics.items()}
         })
+        
+        # MEMORY SAFETY: Limit metrics history to prevent unbounded growth
+        if len(metrics_history) > 200:
+            metrics_history = metrics_history[-200:]
+        
+        # MEMORY SAFETY: Clear JAX caches every 500 updates as safety net
+        if (update + 1) % 500 == 0:
+            jax.clear_caches()
+            print(f"  [MEMORY] Cleared JAX caches at update {update + 1}")
     
     total_time = time.time() - start_time
     print(f"\nTraining complete!")
@@ -943,8 +989,31 @@ if __name__ == "__main__":
     parser.add_argument('--data_filter', type=str, default=None,
                        choices=['high_volatility', 'trending', 'ranging'],
                        help='Filter training data by market conditions')
+    parser.add_argument('--hardware_profile', type=str, default=None,
+                       help='Path to hardware profile YAML file')
 
     args = parser.parse_args()
+
+    # FIX: Ensure checkpoint directory matches convention (models/phase1_jax_{market})
+    if args.checkpoint_dir == "models/phase1_jax":
+        args.checkpoint_dir = f"models/phase1_jax_{args.market.lower()}"
+        print(f"[CONFIG] Auto-updated checkpoint dir to: {args.checkpoint_dir}")
+    else:
+        print(f"[CONFIG] Using specified checkpoint dir: {args.checkpoint_dir}")
+
+    # Load hardware profile if provided
+    if args.hardware_profile:
+        import yaml
+        try:
+            with open(args.hardware_profile, 'r') as f:
+                profile = yaml.safe_load(f)
+                print(f"Loading hardware profile from {args.hardware_profile}")
+        except FileNotFoundError:
+            print(f"Error: Hardware profile file not found at {args.hardware_profile}")
+            exit(1)
+        except yaml.YAMLError as e:
+            print(f"Error parsing hardware profile {args.hardware_profile}: {e}")
+            exit(1)
     
     # Validate arguments
     if args.num_envs <= 0:
@@ -995,9 +1064,25 @@ if __name__ == "__main__":
         anneal_lr=args.lr_annealing,  # NEW: enable LR annealing if flag set
     )
     
-    env_params = EnvParams(
-        rth_start_count=int(data.rth_indices.shape[0])
-    )
+    # FIX (2025-12-10): Use market-specific contract values instead of ES defaults
+    # Previously used EnvParams() which defaults to ES (contract_size=50.0)
+    # NQ should use $20/point, not $50/point - losses were calculated 2.5x too large!
+    market_spec = get_market_spec(args.market)
+    if market_spec:
+        print(f"Using {args.market} contract specs: ${market_spec.contract_multiplier}/point")
+        env_params = EnvParams(
+            contract_size=market_spec.contract_multiplier,
+            tick_size=market_spec.tick_size,
+            tick_value=market_spec.tick_value,
+            commission=market_spec.commission,
+            slippage_ticks=market_spec.slippage_ticks,
+            rth_start_count=int(data.rth_indices.shape[0])
+        )
+    else:
+        print(f"Warning: Unknown market {args.market}, using ES defaults")
+        env_params = EnvParams(
+            rth_start_count=int(data.rth_indices.shape[0])
+        )
     
     # Train with real data (with Phase 2 metrics tracker integration)
     trained_state, normalizer, metrics = train(

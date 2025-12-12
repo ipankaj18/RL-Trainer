@@ -922,9 +922,21 @@ def create_callbacks(model, eval_env, hybrid_agent, market_name, config=None):
         eval_freq = recommended_eval_freq
 
     n_eval_episodes = max(1, int(config.get('n_eval_episodes', 10)))
-    best_model_dir = Path(config['model_save_path']) / market_name
+    # Standardize naming: models/phase3_hybrid_{market}
+    base_name = os.path.basename(config['model_save_path'])
+    if not base_name.endswith(f"_{market_name.lower()}"):
+         # If config path doesn't already have the suffix, append it
+         # We strip the generic name if it's just 'phase3_hybrid' to avoid double labeling if we want strictly phase3_hybrid_nq
+         # But safer to just append to the base key
+         full_path_str = f"{str(config['model_save_path'])}_{market_name.lower()}"
+    else:
+         full_path_str = str(config['model_save_path'])
+
+    best_model_dir = Path(full_path_str)
     best_model_dir.mkdir(parents=True, exist_ok=True)
-    eval_log_dir = Path("./logs/phase3_eval") / market_name
+    
+    # Also ensure evaluation logs follow the pattern
+    eval_log_dir = Path("./logs/phase3_eval") / f"{market_name.lower()}"
     eval_log_dir.mkdir(parents=True, exist_ok=True)
 
     # Create hook first so we can link it to parent
@@ -1299,8 +1311,14 @@ def train_phase3(
 
     _ensure_phase3_directories(config, market_name)
     
-    # Data loading
-    data_pattern = f"./data/{market_name}_D1M.csv"
+    # Data loading - TRAIN/TEST SPLIT: Prefer train-specific file
+    train_data_pattern = f"./data/{market_name}_D1M_train.csv"
+    full_data_pattern = f"./data/{market_name}_D1M.csv"
+    if os.path.exists(train_data_pattern):
+        data_pattern = train_data_pattern
+        safe_print(f"[DATA] Using TRAIN data (80%): {data_pattern}")
+    else:
+        data_pattern = full_data_pattern
     try:
         env_data, second_data = load_data_for_training(
             market_name, data_pattern, 

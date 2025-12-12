@@ -696,62 +696,128 @@ class IncrementalDataUpdater:
             self.print(f"  ✗ Backup failed for {file_path.name}: {e}", "ERROR")
             return None
 
+    def split_train_test(self, df: pd.DataFrame, train_ratio: float = 0.80) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Split data chronologically into train and test sets.
+        
+        Time-based split is critical for financial data:
+        - Training uses EARLIER data (oldest 80%)
+        - Testing uses LATER data (newest 20%)
+        This prevents look-ahead bias and simulates real deployment.
+        
+        Args:
+            df: Full DataFrame sorted by datetime
+            train_ratio: Fraction for training (default 0.80 = 80%)
+            
+        Returns:
+            (train_df, test_df) tuple
+        """
+        # Ensure data is sorted chronologically
+        if 'datetime' in df.columns:
+            df = df.sort_values('datetime').reset_index(drop=True)
+        
+        split_idx = int(len(df) * train_ratio)
+        train_df = df.iloc[:split_idx].copy()
+        test_df = df.iloc[split_idx:].copy()
+        
+        # Log split info
+        if 'datetime' in df.columns and len(train_df) > 0 and len(test_df) > 0:
+            train_start = train_df['datetime'].min()
+            train_end = train_df['datetime'].max()
+            test_start = test_df['datetime'].min()
+            test_end = test_df['datetime'].max()
+            self.print(f"    Train: {len(train_df):,} rows ({train_start} to {train_end})", "DEBUG")
+            self.print(f"    Test:  {len(test_df):,} rows ({test_start} to {test_end})", "DEBUG")
+        
+        return train_df, test_df
+
     def update_data_files(self, minute_df: pd.DataFrame,
                           second_df: Optional[pd.DataFrame] = None) -> Dict[str, bool]:
         """
-        Atomically update data files
+        Atomically update data files with train/test split.
+        
+        Creates 6 files total:
+        - {MARKET}_D1M.csv (full minute data)
+        - {MARKET}_D1M_train.csv (80% oldest for training)
+        - {MARKET}_D1M_test.csv (20% newest for evaluation)
+        - {MARKET}_D1S.csv (full second data, if provided)
+        - {MARKET}_D1S_train.csv (80% oldest for training)
+        - {MARKET}_D1S_test.csv (20% newest for evaluation)
 
         Args:
             minute_df: Processed minute-level DataFrame
             second_df: Processed second-level DataFrame (optional)
 
         Returns:
-            Dict with success status for each file
+            Dict with success status for each file type
         """
-        results = {'minute': False, 'second': False}
+        results = {'minute': False, 'minute_train': False, 'minute_test': False,
+                   'second': False, 'second_train': False, 'second_test': False}
 
-        # Update minute file
+        # ============================================================
+        # MINUTE DATA
+        # ============================================================
         minute_file = self.data_dir / f"{self.market}{MINUTE_FILE_SUFFIX}"
-        temp_minute = self.data_dir / f"{self.market}{MINUTE_FILE_SUFFIX}.tmp"
+        minute_train_file = self.data_dir / f"{self.market}_D1M_train.csv"
+        minute_test_file = self.data_dir / f"{self.market}_D1M_test.csv"
 
         try:
-            self.print("  Writing minute data...", "DEBUG")
-            minute_df.to_csv(temp_minute, index=False)
-
-            # Atomic rename
-            temp_minute.replace(minute_file)
-
-            file_size = minute_file.stat().st_size / (1024 * 1024)  # MB
+            # Write full minute data
+            self.print("  Writing minute data (full)...", "DEBUG")
+            minute_df.to_csv(minute_file, index=False)
+            file_size = minute_file.stat().st_size / (1024 * 1024)
             self.print(f"  ✓ {minute_file.name} ({len(minute_df):,} rows, {file_size:.1f} MB)")
-
             results['minute'] = True
 
-        except Exception as e:
-            self.print(f"  ✗ Failed to update minute file: {e}", "ERROR")
-            if temp_minute.exists():
-                temp_minute.unlink()
+            # Split and write train/test
+            self.print("  Splitting minute data (80% train / 20% test)...", "DEBUG")
+            minute_train, minute_test = self.split_train_test(minute_df, train_ratio=0.80)
+            
+            minute_train.to_csv(minute_train_file, index=False)
+            train_size = minute_train_file.stat().st_size / (1024 * 1024)
+            self.print(f"  ✓ {minute_train_file.name} ({len(minute_train):,} rows, {train_size:.1f} MB)")
+            results['minute_train'] = True
+            
+            minute_test.to_csv(minute_test_file, index=False)
+            test_size = minute_test_file.stat().st_size / (1024 * 1024)
+            self.print(f"  ✓ {minute_test_file.name} ({len(minute_test):,} rows, {test_size:.1f} MB)")
+            results['minute_test'] = True
 
-        # Update second file if provided
+        except Exception as e:
+            self.print(f"  ✗ Failed to update minute files: {e}", "ERROR")
+
+        # ============================================================
+        # SECOND DATA (if provided)
+        # ============================================================
         if second_df is not None:
             second_file = self.data_dir / f"{self.market}{SECOND_FILE_SUFFIX}"
-            temp_second = self.data_dir / f"{self.market}{SECOND_FILE_SUFFIX}.tmp"
+            second_train_file = self.data_dir / f"{self.market}_D1S_train.csv"
+            second_test_file = self.data_dir / f"{self.market}_D1S_test.csv"
 
             try:
-                self.print("  Writing second data...", "DEBUG")
-                second_df.to_csv(temp_second, index=False)
-
-                # Atomic rename
-                temp_second.replace(second_file)
-
-                file_size = second_file.stat().st_size / (1024 * 1024)  # MB
+                # Write full second data
+                self.print("  Writing second data (full)...", "DEBUG")
+                second_df.to_csv(second_file, index=False)
+                file_size = second_file.stat().st_size / (1024 * 1024)
                 self.print(f"  ✓ {second_file.name} ({len(second_df):,} rows, {file_size:.1f} MB)")
-
                 results['second'] = True
 
+                # Split and write train/test
+                self.print("  Splitting second data (80% train / 20% test)...", "DEBUG")
+                second_train, second_test = self.split_train_test(second_df, train_ratio=0.80)
+                
+                second_train.to_csv(second_train_file, index=False)
+                train_size = second_train_file.stat().st_size / (1024 * 1024)
+                self.print(f"  ✓ {second_train_file.name} ({len(second_train):,} rows, {train_size:.1f} MB)")
+                results['second_train'] = True
+                
+                second_test.to_csv(second_test_file, index=False)
+                test_size = second_test_file.stat().st_size / (1024 * 1024)
+                self.print(f"  ✓ {second_test_file.name} ({len(second_test):,} rows, {test_size:.1f} MB)")
+                results['second_test'] = True
+
             except Exception as e:
-                self.print(f"  ✗ Failed to update second file: {e}", "ERROR")
-                if temp_second.exists():
-                    temp_second.unlink()
+                self.print(f"  ✗ Failed to update second files: {e}", "ERROR")
 
         return results
 
@@ -986,13 +1052,19 @@ Examples:
 
     print(f"\n[FILES] Updated:")
     print(f"  ✓ {args.market}{MINUTE_FILE_SUFFIX} ({len(merged_minute_df):,} total rows)")
+    print(f"  ✓ {args.market}_D1M_train.csv (80% = {int(len(merged_minute_df) * 0.8):,} rows)")
+    print(f"  ✓ {args.market}_D1M_test.csv (20% = {int(len(merged_minute_df) * 0.2):,} rows)")
     if merged_second_df is not None:
         print(f"  ✓ {args.market}{SECOND_FILE_SUFFIX} ({len(merged_second_df):,} total rows)")
+        print(f"  ✓ {args.market}_D1S_train.csv (80%)")
+        print(f"  ✓ {args.market}_D1S_test.csv (20%)")
 
     if updater.backup_enabled:
         print(f"\n[BACKUP] Backups saved in {updater.backup_dir}/")
 
     print(f"\n[NEXT] Ready for training!")
+    print(f"  Training will auto-use: {args.market}_D1M_train.csv")
+    print(f"  Evaluation will auto-use: {args.market}_D1M_test.csv")
     print("=" * 60)
 
     return 0

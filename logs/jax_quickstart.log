@@ -1,0 +1,52 @@
+
+============================================================
+2025-12-12T16:54:18.839296 - JAX Installation Validation
+Command: /usr/bin/python /workspace/src/jax_migration/quickstart.py
+Return Code: 0
+Output:
+W1212 16:54:04.321601    2084 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 16:54:04.324706    1762 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+======================================================================
+JAX Migration Quick Start
+======================================================================
+[1/5] Checking JAX installation...
+  ✓ JAX version: 0.8.1
+  ✓ Devices: [CudaDevice(id=0)]
+  ✓ GPU detected!
+[2/5] Checking dependencies...
+  ✓ flax
+  ✓ optax
+  ✓ chex
+[3/5] Checking JAX migration module...
+JAX Migration Module v0.2.0
+JAX version: 0.8.1
+Devices: [CudaDevice(id=0)]
+Feature Status:
+  Phase 1 Environment: ✓ Ready
+  Phase 2 Environment: ✓ Ready
+  Training Pipeline:   ✓ Ready
+Quick Start:
+  from jax_migration import load_market_data, EnvParams, PPOConfig, train
+  data = load_market_data('data/ES_D1M.csv')
+  config = PPOConfig(num_envs=1024, total_timesteps=500_000)
+  trained_state, normalizer, metrics = train(config, EnvParams(), data)
+[4/5] Running basic tests...
+  ✓ Single env reset: obs shape (225,)
+  ✓ Single env step: position=1
+  ✓ Batch reset: 100 envs
+[5/5] Quick throughput benchmark...
+  ✓ 1000 envs × 100 steps: 994,373 steps/sec
+  ✓ Throughput target met! (>100k steps/sec)
+======================================================================
+Quick Start Complete!
+======================================================================
+Next steps:
+  1. Load your market data:
+     from jax_migration import load_market_data
+     data = load_market_data('data/ES_D1M.csv')
+  2. Run validation tests:
+     python -m jax_migration.test_validation
+  3. Start training:
+     from jax_migration import PPOConfig, train
+     config = PPOConfig(num_envs=2048, total_timesteps=1_000_000)
+     trained_state, normalizer, metrics = train(config, EnvParams(rth_start_count=<len>), data)

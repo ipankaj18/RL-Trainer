@@ -280,22 +280,25 @@ def detect_and_select_market(project_dir: Path) -> Optional[str]:
             print(f"\n{Colors.RED}Data directory not found: {data_dir}{Colors.RESET}")
             return None
 
-        # Find all *_D1M.csv files
-        minute_files = list(data_dir.glob("*_D1M.csv"))
+        # Find all *_D1M*.csv files (includes train/test splits)
+        minute_files = list(data_dir.glob("*_D1M*.csv"))
 
         if not minute_files:
             print(f"\n{Colors.RED}No market data files found in data/ directory.{Colors.RESET}")
             print(f"{Colors.YELLOW}Please run 'Data Processing' first to prepare market data.{Colors.RESET}")
             return None
 
-        # Extract market symbols
-        available_markets = []
+        # Extract unique market symbols (deduplicate train/test variants)
+        seen_markets = {}
         for file in minute_files:
-            market = file.stem.replace("_D1M", "")
-            available_markets.append({
-                'market': market,
-                'minute_file': file.name
-            })
+            market = file.stem.split("_D1M")[0]
+            if market not in seen_markets:
+                seen_markets[market] = {
+                    'market': market,
+                    'minute_file': file.name
+                }
+        
+        available_markets = list(seen_markets.values())
 
         if not available_markets:
             print(f"\n{Colors.RED}No market data files found in data/ directory.{Colors.RESET}")
@@ -312,7 +315,7 @@ def detect_and_select_market(project_dir: Path) -> Optional[str]:
             spec_info = f"${market_spec.contract_multiplier} x {market_spec.tick_size} tick = ${market_spec.tick_value:.2f}"
 
             print(f"{Colors.GREEN}Detected 1 market:{Colors.RESET}")
-            print(f"  • {Colors.BOLD}{market}{Colors.RESET} - {available_markets[0]['minute_file']}")
+            print(f"  • {Colors.BOLD}{market}{Colors.RESET} - Data available")
             print(f"    {Colors.CYAN}{spec_info}{Colors.RESET}")
             print(f"\n{Colors.GREEN}Auto-selecting {market} for training.{Colors.RESET}")
             return market
@@ -325,7 +328,7 @@ def detect_and_select_market(project_dir: Path) -> Optional[str]:
             market_spec = get_market_spec(market)
             spec_info = f"${market_spec.contract_multiplier} x {market_spec.tick_size} tick = ${market_spec.tick_value:.2f}"
 
-            print(f"{Colors.BOLD}  {i}. {market:<8}{Colors.RESET} - {market_info['minute_file']:<25}")
+            print(f"{Colors.BOLD}  {i}. {market:<8}{Colors.RESET} - Data available")
             print(f"     {Colors.CYAN}{spec_info} | Commission: ${market_spec.commission}/side{Colors.RESET}")
             print()
 

@@ -283,11 +283,20 @@ def create_lr_schedule(initial_lr, final_fraction, total_timesteps):
 
 
 def find_data_file(market=None):
-    """Find training data file with priority order."""
+    """Find training data file with priority order.
+    
+    TRAIN/TEST SPLIT: Prefers *_train.csv files for training.
+    """
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(script_dir, 'data')
 
+    # TRAIN/TEST SPLIT: Try train-specific file first
     if market and market != 'GENERIC':
+        train_file = os.path.join(data_dir, f'{market}_D1M_train.csv')
+        if os.path.exists(train_file):
+            safe_print(f"[DATA] Using TRAIN data (80%): {train_file}")
+            return train_file
+        # Fall back to full market file
         market_file = os.path.join(data_dir, f'{market}_D1M.csv')
         if os.path.exists(market_file):
             return market_file
@@ -305,6 +314,14 @@ def find_data_file(market=None):
         if os.path.exists(path):
             return path
 
+    # TRAIN/TEST SPLIT: Search for train files first
+    train_pattern = os.path.join(data_dir, '*_D1M_train.csv')
+    train_files = sorted(glob.glob(train_pattern))
+    if train_files:
+        safe_print(f"[DATA] Using TRAIN data (80%): {train_files[0]}")
+        return train_files[0]
+
+    # Fall back to full data files
     pattern = os.path.join(data_dir, '*_D1M.csv')
     instrument_files = sorted(glob.glob(pattern))
     if instrument_files:
@@ -575,9 +592,11 @@ def train_phase1(
     safe_print("")
 
     # Create directories
-    os.makedirs('models', exist_ok=True)  # FIX: Ensure base models directory exists
-    os.makedirs('models/phase1', exist_ok=True)
-    os.makedirs('models/phase1/checkpoints', exist_ok=True)
+    os.makedirs('models', exist_ok=True)
+    # FIX: Use market-specific directory
+    model_dir = f'models/phase1_{market_name.lower()}'
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(f'{model_dir}/checkpoints', exist_ok=True)
     os.makedirs('logs/phase1', exist_ok=True)
     os.makedirs('tensorboard_logs/phase1', exist_ok=True)
 
@@ -748,7 +767,7 @@ def train_phase1(
         callback_after_eval=eval_metric_hook,      # Must be a BaseCallback per SB3 API
         eval_freq=PHASE1_CONFIG['eval_freq'],
         n_eval_episodes=PHASE1_CONFIG['n_eval_episodes'],
-        best_model_save_path='./models/phase1/',
+        best_model_save_path=f'./models/phase1_{market_name.lower()}/',
         log_path=eval_log_path,  # IMPROVEMENT: Versioned log path
         deterministic=True,
         render=False,

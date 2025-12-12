@@ -1,5 +1,1079 @@
 # RL Trainer Changelog
 
+## [1.9.7] - 2025-12-12
+
+### Added
+- **Apex Trailing Cap** (`env_phase2_jax.py`, `env_phase1_jax.py`):
+  - Trailing drawdown threshold STOPS rising when `Portfolio > Initial Balance + $100`.
+  - Prevents "fear of profit" behavior where agents avoid making money to keep the floor low.
+- **Auto-Liquidation Guardrail**:
+  - Force closes positions if `Drawdown Room < $1000` (Aggressive Safety Buffer).
+  - Prevents hard "Intra-bar DD Violations" by accepting a smaller loss to survive the episode.
+- **Evaluator Metrics**:
+  - Added "Min Margin" (Distance to Floor) to reports.
+  - Changed Pass/Fail logic to respect the Capped Rules (based on `apex_violations` count).
+
+### Changed
+- **Phase 1 Synchronization**: Ported all Apex logic to `env_phase1_jax.py` so agents learn the "Safety Zone" concept from the start.
+- **Evaluator Fixes**: 
+  - Fixed `NameError` crash.
+  - Clarified "Steps/Sec" metric (Env Steps vs Vector Steps).
+
+### Fixed
+- **Max Drawdown Metric**: Corrected false positives in Evaluator where $5000+ drawdowns were flagged as failures even when compliant with the Trailing Cap rule.
+
+---
+
+## [1.9.6] - 2025-12-12
+
+### Market Specifications Update (User Request)
+
+**Changes:**
+- **Position Limits**: Reduced `max_position_size` for standard E-minis (ES, NQ, YM, RTY) from **3** to **1** to ensure evaluation safety against drawdown limits.
+- **New Markets**: Added support for Gold (GC) and Crude Oil (CL) with max position size 1.
+- **New Micros**: Added support for Micro Gold (MGC) and Micro Crude Oil (MCL) with max position size 12.
+
+---
+
+## [1.9.5] - 2025-12-12
+
+### Critical Evaluator Bug Fix - 36% Stop Issue
+
+**Problem**: JAX Phase 2 evaluator stopped at 36% (178/500 steps) with only 1 episode completed despite requesting more.
+
+**Root Causes Identified:**
+1. **main.py bug**: Prompt showed "default 10" but actually defaulted to "1" episode
+2. **Evaluator bug**: Auto-reset only worked in walkthrough mode - in normal episodes mode, evaluation stopped when first episode ended at RTH close
+
+**Fixes Applied:**
+
+#### Fix 1: main.py Default Episodes (`main.py:1455-1457`)
+- Changed default from `"1"` to `"50"` for statistical significance
+- Updated prompt text to match: "default 50"
+
+#### Fix 2: Universal Auto-Reset (`evaluate_phase2_jax.py:437-480`)
+- Auto-reset now works for ALL modes, not just walkthrough
+- Episodes continue until target `num_episodes` is reached
+- Tracks `episodes_completed` correctly across all modes
+
+**Expected Results After Fix:**
+- Evaluation runs for full 50 episodes (default)
+- Coverage should be ~80%+ instead of 0.7%
+- 500+ trades evaluated instead of 19
+- Statistically significant metrics
+
+---
+
+## [1.9.4] - 2025-12-12
+
+### Market-Aware Position Sizing Implementation
+
+**Problem**: Dynamic position sizing was calculated but never used - all PnL calculations defaulted to fixed `position_size = 1.0`. Commission fees were inconsistent across markets.
+
+**Solution**: Comprehensive market-aware position sizing with reward normalization.
+
+#### Changes Applied:
+
+##### 1. Market Specifications (`src/market_specs.py`)
+- **NEW FIELDS**: Added `market_type` ("emini" or "micro") and `max_position_size` (3 or 12) to `MarketSpecification`
+- **COMMISSION STANDARDIZATION**: Updated all markets to $0.50/side
+- **Emini markets** (ES, NQ, YM, RTY): `max_position_size=3`
+- **Micro markets** (MES, MNQ, MYM, M2K): `max_position_size=12`
+
+##### 2. Phase 2 Environment (`src/jax_migration/env_phase2_jax.py`)
+- **NEW STATE FIELD**: Added `position_size: jnp.ndarray` to `EnvStatePhase2` to track actual contracts per trade
+- **DYNAMIC SIZING BUG FIX**: Updated 12 PnL calculation sites to use `state.position_size` or `new_position_size` instead of `params.position_size`:
+  - `calculate_unrealized_pnl()` - lines 232-233
+  - `action_masks_phase2()` - BE profitability threshold
+  - `validate_pm_action()` - PnL validation
+  - Trade close PnL calculation - lines 791-793
+  - Forced close PnL calculation - lines 824-826
+  - BE threshold calculation - line 867
+  - Entry commission - line 888
+  - Unrealized PnL after entry - lines 898-905
+  - Worst-case drawdown calculation - lines 940-941
+  - New state creation - line 1001
+- **REWARD NORMALIZATION**: Added `normalization_factor = 1.0 / params.max_position_size` to ensure 12 micros ≈ 1 emini in learning signal
+- **STATE INITIALIZATION**: Updated `reset_phase2()` to initialize `position_size` with `params.position_size`
+
+##### 3. Training Scripts
+- **`train_phase2_jax.py`**: Now extracts `max_position_size` from market specs and passes to `EnvParamsPhase2`
+- **Curriculum loop**: `max_position_size` is preserved when recreating env_params
+
+##### 4. Evaluator (`src/jax_migration/evaluate_phase2_jax.py`)
+- Added `max_position_size` to env_params for proper reward calculation
+- Updated episode auto-reset to include new `position_size` field
+
+**⚠️ BREAKING CHANGE**: Old checkpoints are incompatible due to `EnvStatePhase2` structure change. Fresh training required.
+
+**Testing Strategy**:
+1. **Dynamic Sizing Verification**: Confirm trades use calculated position sizes
+2. **Commission Verification**: Check all markets use $0.50/side
+3. **Reward Normalization**: Verify 12 micro contracts produce similar rewards to 1 emini
+4. **Market Limits**: Verify emini capped at 3 contracts, micro at 12
+
+---
+
+
+## [1.9.3] - 2025-12-11
+
+### Evaluator Coverage Fixes
+
+**Problem**: Evaluation with `--episodes 1` only covered 178/26,682 bars (0.67%) before terminating at RTH close.
+
+**Root Cause**: Single episode terminates at RTH close (~4:59 PM ET), not at end of data. With random RTH start times, late starts result in very short episode lengths.
+
+**Fixes Applied:**
+
+#### Fix 1: Sequential Walkthrough Mode (`--walkthrough`)
+- NEW flag evaluates entire dataset sequentially
+- Episodes auto-reset at RTH close and continue to next trading day
+- Provides 100% dataset coverage
+- `python evaluate_phase2_jax.py --model-path ... --walkthrough`
+
+#### Fix 2: Auto-Reset Episodes in Walkthrough Mode
+- When episode terminates (RTH close, etc.), automatically resets and continues
+- Tracks unique bars visited for coverage metrics
+
+#### Fix 3: Default Episodes 10 → 50
+- Increased default episodes from 10 to 50
+- Provides ~56% coverage with random sampling
+- Better statistical significance for results
+
+#### Fix 4: Coverage Metrics
+- NEW output: Total Steps, Unique Bars coverage %, Episodes Completed, Speed
+- JSON output includes `coverage` object with full metrics
+- Helps diagnose evaluation completeness
+
+**Files Modified:**
+- `src/jax_migration/evaluate_phase2_jax.py`
+
+**Usage Examples:**
+```bash
+# Full dataset walkthrough (recommended for benchmarking)
+python -m src.jax_migration.evaluate_phase2_jax --model-path models/phase2_jax_nq/phase2_jax_final_3051 --market NQ --walkthrough
+
+# 50 random episodes (default, good for variance)
+python -m src.jax_migration.evaluate_phase2_jax --model-path models/phase2_jax_nq/phase2_jax_final_3051 --market NQ
+
+# Custom episode count
+python -m src.jax_migration.evaluate_phase2_jax --model-path models/phase2_jax_nq/phase2_jax_final_3051 --market NQ --episodes 100
+```
+
+---
+
+## [1.9.2] - 2025-12-10
+
+### Evaluation Fixes (0 Trades Bug)
+
+**Problem**: Phase 2 JAX evaluation showed 0 trades despite successful training (57.4% WR, $440K P&L).
+
+**Root Causes Identified:**
+1. Normalizer shape mismatch (231 vs 233 dims after Apex features added)
+2. Default 1 episode = no statistical significance (episodes often end early at RTH close)
+3. Forced EOD closes not counted as trades
+
+**Fixes Applied:**
+
+#### Fix 1: Normalizer Shape Validation
+- Evaluator now validates normalizer shape matches expected obs_shape (233)
+- If mismatch detected, falls back to identity normalizer with warning
+- Prevents corrupted model inputs from old normalizers
+
+#### Fix 2: Termination Reason Debug Logging
+- Added debug logging when episodes terminate within first 100 steps
+- Shows reason: RTH close, drawdown violation, or end of data
+- Helps diagnose early termination issues
+
+#### Fix 3: Include Forced Closes in Trade Count
+- `forced_close` (EOD position closure) now counted as trades
+- Previously only SL/TP hits were counted
+- More accurate trade statistics
+
+#### Fix 4: Default Episodes Changed 1→10
+- JAX evaluation default episodes increased from 1 to 10
+- Provides statistical significance for results
+- Single-episode evaluations are meaningless
+
+#### Fix 5: RTH Start Index Buffer Increased
+- `precompute_rth_indices` now requires 400 bars remaining instead of 100
+- Prevents episodes from hitting "End of data" after only a few steps
+- Ensures evaluation episodes run for meaningful duration
+
+#### Fix 6: Termination Reason Debugging
+- Added termination flags to env info dict: `dd_violation`, `intra_bar_dd_violation`, `end_of_data`, `time_violation`, `worst_case_equity`, `step_idx`, etc.
+- Evaluator now shows ACTUAL termination reason (not guesses)
+- Created `src/jax_migration/debug_evaluation.py` for step-by-step episode tracing
+
+#### Fix 7: ⚠️ CRITICAL - Market-Specific Contract Values (Evaluator)
+- **Root Cause**: Evaluator used ES contract_size (50.0) for ALL markets, but NQ is 20.0
+- **Impact**: Losses were calculated 2.5x larger than actual ($9,770 shown vs ~$3,900 real)
+- **Fix**: Evaluator and debug script now import `market_specs.py` and use correct contract multipliers
+- Now prints "Using NQ contract specs: $20/point" to confirm
+
+#### Fix 8: ⚠️ CRITICAL - Market-Specific Contract Values (Training)
+- **Root Cause**: Training scripts also used ES contract_size (50.0) defaults!
+- **Impact**: Models trained with wrong contract values - **retraining required**
+- **Fix**: Both Phase 1 and Phase 2 training scripts now use `market_specs.py`
+- Training log now shows "Using NQ contract specs: $20/point"
+- Added documentation to EnvParams classes warning about ES defaults
+
+#### Fix 9: ⚠️ CRITICAL - SL Distance Cap for Apex Compliance
+- **Root Cause**: SL distance of 1.5×ATR = 195 points for NQ = $3,900 max loss
+- **Impact**: Single trade could exceed $2,500 DD limit instantly!
+- **Fix**: SL distance now capped at $500/contract_size points
+  - NQ: max 25 points SL ($500)
+  - ES: max 10 points SL ($500)
+- Allows 5 consecutive losses before hitting DD limit
+- Applied to both Phase 1 and Phase 2 environments
+
+#### Fix 10: ⚠️ CRITICAL - INTRA-BAR DD Check Fix
+- **Problem**: INTRA-BAR DD check fired incorrectly (Step 9) despite SL protection.
+- **Root Cause**: Check used raw bar `high/low` to calculate worst loss, ignoring SL exit properies.
+  - Example: A 200pt spike incorrectly calculated as $4,000 loss, even if SL was 25pts ($500).
+- **Fix**: Capped `worst_case_price` at `sl_price`.
+- **Impact**: Eliminates false positive DD violations during evaluation.
+- **Files**: `src/jax_migration/env_phase2_jax.py`, `src/jax_migration/env_phase1_jax.py`
+
+#### Fix 11: ⚠️ CRITICAL - Position Sizing Logic Hardening
+- **Problem**: Agent took too many contracts (causing $4004 DD) because logic ignored global DD limit.
+- **Root Cause**: `calculate_position_size` used uncapped ATR for SL distance (result: small/large mismatch) and didn't check against *remaining* drawdown.
+- **Fix**:
+  1. Use Capped SL Distance in sizing calc (consistent with execution).
+  2. Cap total risk at `remaining_dd * 0.9` (10% buffer).
+- **Impact**: Impossible to risk more than account can handle.
+- **Files**: `src/jax_migration/env_phase2_jax.py`
+
+**Files Modified:**
+- `src/jax_migration/evaluate_phase2_jax.py` (Fixes 1, 2, 3, 6, 7)
+- `src/jax_migration/env_phase2_jax.py` (Fixes 6, 8 docs, 9, 10, 11)
+- `src/jax_migration/env_phase1_jax.py` (Fixes 8 docs, 9, 10)
+- `src/jax_migration/data_loader.py` (Fix 5)
+- `src/jax_migration/debug_evaluation.py` (NEW - Fixes 6, 7)
+- `src/jax_migration/train_phase2_jax.py` (Fix 8)
+- `src/jax_migration/train_ppo_jax_fixed.py` (Fix 8)
+- `main.py` (Fix 4)
+
+> [!IMPORTANT]
+> After Fix 9, **RETRAINING IS REQUIRED** with the new SL cap.
+> Max loss per trade is now $500, ensuring Apex DD compliance.
+
+---
+
+## [1.9.1] - 2025-12-10
+
+### Maximum Safety DD Fixes (v2)
+
+**Problem**: Model still exceeded $2,500 DD limit (260%: $6,503 max DD).
+
+**Solution (4 Additional Fixes):**
+
+#### Fix A: Stronger Graduated Penalty
+- Penalty now -15 max (was -5)
+- Starts at 30% DD (was 50%)
+- 3x stronger deterrent
+
+#### Fix B: Reduced Max SL Loss
+- Max SL loss per trade: $500 (was $1000)
+- 5 consecutive losses needed to hit limit (was 2-3)
+
+#### Fix C: DD-Based Position Scaling
+- Position size reduces as DD increases
+- 100% at 0% DD → 20% at 80% DD
+- Automatically de-risks when in trouble
+
+#### Fix D: Emergency HOLD at 80% DD
+- BUY/SELL masked when DD > 80% of limit
+- Forces model to manage existing positions, not open new ones
+
+**Files Modified:**
+- `src/jax_migration/env_phase2_jax.py` (all 4 fixes)
+
+---
+
+## [1.9.0] - 2025-12-10
+
+### ⚠️ BREAKING: Apex Compliance Overhaul
+
+**Problem**: Trained model was profitable (+$8,861) but had $16,528 max drawdown (6.6x over $2,500 Apex limit).
+
+**Root Causes Identified:**
+1. Model couldn't see drawdown in observation
+2. Position sizing allowed $1,500+ single-trade losses
+3. Penalty only applied after violation (cliff, not gradient)
+4. No intra-bar drawdown check
+
+**Solution (4 Fixes):**
+
+#### Fix 1: Drawdown in Observation (BREAKING)
+- Added `drawdown_ratio` and `drawdown_room` to phase2_features
+- **Observation shape changed: 231 → 233**
+- Model can now see how close it is to the limit
+
+#### Fix 2: Graduated Drawdown Penalty
+- Penalty starts at 50% of limit (0), scales to -5 at 100%
+- Cliff penalty (-10) only on hard violation
+- Model learns to back off before hitting limit
+
+#### Fix 3: Apex-Safe Position Sizing
+- Added cap to ensure max SL loss < $1,000 per trade
+- Safely allows 2 consecutive losses before limit
+- `apex_safe_size = 1000 / (SL_distance_dollars)`
+
+#### Fix 4: Intra-Bar Drawdown Check
+- Uses `low_s`/`high_s` to detect worst-case intra-bar equity
+- Catches violations that would occur during live trading
+
+#### Fix 5: DD-Aware Exploration Bonus (Prevents HOLD Trap v2)
+- **Problem**: With DD penalties, model might learn HOLD avoids punishment → new HOLD trap
+- **Solution**: Keep exploration bonus active + boost when in drawdown
+- 20% minimum floor (bonus never fully decays)
+- DD boost: +25% at 50% drawdown, +50% at 100% drawdown
+- Encourages trading out of difficult situations
+
+**Files Modified:**
+- `src/jax_migration/env_phase2_jax.py` (observation, reward, position sizing, termination)
+- `src/jax_migration/evaluate_phase2_jax.py` (obs_shape 231→233)
+
+**⚠️ All existing Phase 2 models are INCOMPATIBLE. Retrain required.**
+
+---
+
+## [1.8.9] - 2025-12-10
+
+### Fixed - CRITICAL: Evaluator 100% HOLD (Argmax Bug)
+
+**Problem**: Evaluator produced 100% HOLD with 0 trades despite trained model having healthy action distribution.
+
+**Root Cause**: 
+1. **Relative path error**: Orbax requires absolute paths, evaluator didn't convert
+2. **Deterministic argmax defeats floor**: The 3% floor raises BUY/SELL to 3%, but HOLD is still ~85%, so `argmax()` always picks HOLD
+
+**Solution**:
+- Added automatic relative→absolute path conversion in `load_checkpoint()`
+- Changed `deterministic` mode to use weighted sampling (like stochastic) instead of pure argmax
+- Both modes now respect the 3% exploration floor
+- Fixed normalizer loading to search parent directory (normalizers are saved at model root, not in checkpoint subfolders)
+
+**Files Modified**: `src/jax_migration/evaluate_phase2_jax.py` (lines 50-66, 142-177, 284-291)
+
+**Usage** (unchanged):
+```bash
+python -m src.jax_migration.evaluate_phase2_jax \
+    --model-path models/phase2_jax_nq/phase2_jax_final_3051 \
+    --market NQ
+```
+
+---
+
+## [1.8.8] - 2025-12-10
+
+### Fixed - JAX Phase 2 Evaluator Double Market Prompt
+
+**Problem**: JAX Phase 2 evaluator asked users to select market TWICE:
+1. First prompt showed duplicate market entries (e.g., "1. NQ - NQ_D1M_train.csv" and "2. NQ - NQ_D1M_test.csv")
+2. Second prompt asked for data file selection again (train vs test)
+
+**Root Cause**: `detect_and_select_market()` in `src/cli_utils.py` created one entry per data file without deduplicating market symbols. When both `NQ_D1M_train.csv` and `NQ_D1M_test.csv` existed, "NQ" appeared twice in the menu.
+
+**Solution**: Implemented deduplication using a dictionary to track unique market symbols:
+- Each market now appears only once in the first prompt
+- Display message changed from showing specific filename to "Data available"
+- Second data file selection menu remains unchanged and functional
+
+**Files Modified**: `src/cli_utils.py` (lines 291-300, 315, 328)
+
+**User Experience**:
+- **Before**: Select "NQ" from 2 duplicate entries → Select data file again
+- **After**: Select "NQ" once → Select data file (train/test)
+
+---
+
+## [1.8.7] - 2025-12-10
+
+### Fixed - Market Data Detection After Train/Test Split
+
+**Problem**: JAX Phase 2 evaluator reported "No market data files found in data/ directory" despite `NQ_D1M_train.csv` and `NQ_D1M_test.csv` existing in the data folder.
+
+**Root Cause**: 
+1. `cli_utils.py:284` used glob pattern `*_D1M.csv` which only matched files ending exactly with `_D1M.csv`.
+2. `cli_utils.py:294` used `.replace("_D1M", "")` which incorrectly extracted `NQ_train` from `NQ_D1M_train.csv`, causing `get_market_spec` to fail.
+
+**Solution**: 
+- Updated glob pattern to `*_D1M*.csv` to match all variants.
+- Updated extraction logic to `.split("_D1M")[0]` to correctly isolate the market symbol.
+
+**File Modified**: `src/cli_utils.py` (lines 284, 294)
+
+**Note for Deployment**: Real-time trading does NOT require historical CSV files. The TCP bridge in `AIBridgeV2.cs` provides live market data from NinjaTrader. Historical files are only needed for training and backtesting.
+
+---
+
+## [1.8.6] - 2025-12-09
+
+### Fixed - CRITICAL: Evaluator 100% HOLD Bug
+
+**Problem**: JAX Phase 2 evaluator produced 100% HOLD actions on trained models, despite training logs showing healthy action distribution (55% HOLD, 12% entries, 33% PM actions). Evaluation stopped at 5% progress with 0 trades.
+
+**Root Cause Analysis**:
+1. **Missing Exploration Floor**: Evaluator used raw `argmax(logits)` instead of training's `masked_softmax()` with 5% floor
+2. **No Forced Position**: Evaluator EnvParams lacked `forced_position_ratio` (default 0), agent always started flat
+3. **RTH Timing**: Episodes could start outside Regular Trading Hours, blocking BUY/SELL actions
+
+**Solution**:
+- Added `--mode` argument: `deterministic` (default), `stochastic`, or `argmax`
+- Integrated `masked_softmax()` with 3% floor on BUY/SELL in deterministic/stochastic modes
+- Added debug mask logging on first step to diagnose action validity
+
+**Usage**:
+```bash
+# Default: deterministic with 3% floor (recommended)
+python -m src.jax_migration.evaluate_phase2_jax --model-path models/phase2_jax_nq/phase2_jax_final_3051 --market NQ
+
+# Stochastic: sample from probability distribution (matches training)
+python -m src.jax_migration.evaluate_phase2_jax --model-path ... --mode stochastic
+
+# Argmax: pure logits, may produce 100% HOLD (debugging only)
+python -m src.jax_migration.evaluate_phase2_jax --model-path ... --mode argmax
+```
+
+**File Modified**: `src/jax_migration/evaluate_phase2_jax.py`
+
+---
+
+## [1.8.5] - 2025-12-08
+
+### Added - Train/Test Data Split
+
+**Feature**: Automatic 80% train / 20% test split during data processing to prevent overfitting.
+
+**Files Created During Processing**:
+- `{MARKET}_D1M.csv` - Full dataset (unchanged)
+- `{MARKET}_D1M_train.csv` - 80% oldest data for training
+- `{MARKET}_D1M_test.csv` - 20% newest data for evaluation
+- Same pattern for `_D1S` second-level data
+
+**Training Changes**:
+- JAX Phase 1/2 training auto-detects and prefers `*_train.csv`
+- `main.py` menu shows "Using TRAIN data (80%)" confirmation
+
+**Evaluator Changes**:
+- `evaluate_phase2_jax.py` auto-detects and prefers `*_test.csv`
+- Evaluator menu shows labeled files: `[TEST - UNSEEN]`, `[TRAIN - NOT FOR EVAL]`, `[FULL]`
+
+**Files Modified**:
+- `src/incremental_data_updater.py` - Added `split_train_test()`, updated `update_data_files()`
+- `src/jax_migration/train_phase2_jax.py` - Train data auto-detection
+- `src/jax_migration/evaluate_phase2_jax.py` - Test data auto-detection
+- `main.py` - Training commands + evaluator UI
+- `src/train_phase1.py` - PyTorch Phase 1 train data preference
+- `src/train_phase2.py` - PyTorch Phase 2 train data preference
+- `src/train_phase3_llm.py` - PyTorch Phase 3 train data preference
+
+---
+
+## [1.8.4] - 2025-12-08
+
+### Fixed - Evaluator Checkpoint Loading Bug
+
+**Problem**: `evaluate_phase2_jax.py` failed with `ScopeCollectionNotFound: ... the collection is empty` when loading checkpoints.
+
+**Root Cause**: The evaluator used `target=None` in `checkpoints.restore_checkpoint()`, returning a raw dict. The training script saves the full `TrainState`, but the evaluator's param extraction logic failed to correctly match the nested Flax parameter structure.
+
+**Solution**: Changed `load_checkpoint()` to use `target=train_state` (templated restoration), matching how `train_phase2_jax.py` saves and resumes from checkpoints. Added fallback with debug output.
+
+**File Modified**: `src/jax_migration/evaluate_phase2_jax.py`
+
+---
+
+## [1.8.3] - 2025-12-08
+
+### [Date: 2025-12-08] - CRITICAL: JIT Recompilation Memory Leak Fix
+
+#### Problem
+Phase 2 JAX training crashed RunPod servers due to unbounded RAM consumption.
+Training would run out of memory after ~500-1000 updates.
+
+#### Secondary Issue (Fixed Same Day)
+After removing env_params from static_argnums, `params.window_size` became traced,
+causing `lax.dynamic_slice` to fail with "Shapes must be concrete values" error.
+
+#### Root Cause Analysis
+JAX training functions used `env_params` as a **static JIT argument** (`static_argnums`), 
+but `env_params` was **recreated every update** with changing curriculum values:
+- `training_progress`
+- `current_global_timestep`
+- `exploration_bonus` values
+- `forced_position_ratio`
+
+JAX interprets each new `env_params` value as requiring a **new JIT compilation**.
+Each compilation cached ~10-50 MB of XLA code that was **never garbage collected**.
+Over 2,400 updates → **20-100+ GB of accumulated JIT cache** → server crash.
+
+#### Solution
+Removed `env_params` from `static_argnums` in all affected JIT decorators.
+This makes `env_params` a traced argument, avoiding recompilation.
+
+#### Files Modified
+
+**Phase 2 Training (`train_phase2_jax.py`):**
+- Line 264: `@partial(jax.jit, static_argnums=(1, 3, 4))` → `@partial(jax.jit, static_argnums=(3, 4))`
+
+**Phase 1 Training (`train_ppo_jax_fixed.py`):**
+- Line 421: `@partial(jax.jit, static_argnums=(1, 3, 4))` → `@partial(jax.jit, static_argnums=(3, 4))`
+
+**Phase 2 Environment (`env_phase2_jax.py`):**
+- Line 861: `@partial(jax.jit, static_argnums=(3,))` → `@jax.jit`
+- Line 875: `@partial(jax.jit, static_argnums=(2,))` → `@jax.jit`
+- Line 149: `window = params.window_size` → `window = 20` (hardcoded for traced env_params)
+
+**Phase 1 Environment (`env_phase1_jax.py`):**
+- Line 752: `@partial(jax.jit, static_argnums=(3,))` → `@jax.jit`
+- Line 131: `window = int(params.window_size)` → `window = 20` (hardcoded for traced env_params)
+
+#### Expected Impact
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| RAM usage | Grows indefinitely | Stable |
+| Training duration | Crash at ~500-1000 updates | Completes full 2,400+ updates |
+| SPS (steps/second) | N/A (crash) | ~10-15% slower due to traced params |
+
+#### Verification
+```bash
+# Quick functional test
+python -m src.jax_migration.train_phase2_jax --test --total_timesteps 20000 --num_envs 8
+
+# Full verification on RunPod
+watch -n 5 free -h &
+python -m src.jax_migration.train_phase2_jax --market NQ --total_timesteps 5000000
+# RAM should stabilize, not continuously grow
+```
+
+#### ⚠️ Note
+The ~10-15% performance slowdown is an acceptable trade-off vs server crash.
+Modern GPUs can handle the additional tracing overhead.
+
+#### Additional Memory Safety Improvements (Deeper Investigation)
+After the main fix, a deeper investigation was performed. Additional improvements:
+
+**1. Periodic JAX Cache Clearing (Safety Net)**
+- Added `jax.clear_caches()` every 500 updates to both training scripts
+- Files: `train_ppo_jax_fixed.py`, `train_phase2_jax.py`
+- Prints `[MEMORY] Cleared JAX caches at update N` message
+
+**2. Bounded metrics_history List**
+- Limited `metrics_history` to 200 entries in `train_ppo_jax_fixed.py`
+- Prevents unbounded list growth over long training runs
+
+**3. Deprecated Legacy train_ppo_jax.py**
+- Added deprecation warning to `train_ppo_jax.py`
+- This file is unused (superseded by `train_ppo_jax_fixed.py`)
+- Kept for historical reference only
+
+**Components Verified as Properly Bounded:**
+- `TrainingQualityMonitor` - uses `deque(maxlen=...)` ✓
+- `training_metrics_tracker.py` - has `history_limit=200` ✓  
+- `training_quality_validator.py` - pops old items ✓
+- `HyperparameterAutoAdjuster` - saves to disk ✓
+
+#### Stress Test Improvements (Same Day)
+After reviewing `stress_hardware_jax.py`, additional improvements were made:
+
+**1. VRAM-Based Adaptive Scaling**
+- Now detects GPU VRAM and uses combined CPU+VRAM tier detection
+- Results in minimum of CPU-based and VRAM-based limits for safety
+- Example: 8GB GPU caps at 2048 envs even if CPU allows 4096
+
+**2. JIT Cache Clearing**
+- Added `jax.clear_caches()` after each stress test run
+- Prevents memory accumulation across multiple test configurations
+- Applied to both success and error paths
+
+#### Phase 2 Evaluator Fixes (Same Day)
+Critical bug fixes in `evaluate_phase2_jax.py`:
+
+**1. obs_shape Bug Fixed**
+- Was: `20*11+8=228` → Now: `231` (correct)
+- Matches training observation: 220 flat + 5 position + 3 PM + 3 validity
+
+**2. Action Distribution Tracking**
+- Tracks HOLD, BUY, SELL, SL→BE, TRAIL+, TRAIL- usage
+- Displays percentages and counts in output
+
+**3. Apex Compliance Metrics**
+- Tracks maximum drawdown during evaluation
+- Compares against $2,500 trailing drawdown limit
+- Reports PASS/FAIL status and violation count
+
+**4. Other Improvements**
+- Dynamic progress bar (uses data length, not arbitrary 1000)
+- Safe infos access with `.get()` defaults
+- Enhanced JSON output with all new metrics
+
+---
+
+## [1.8.2] - 2025-12-08
+
+
+### [Date: 2025-12-08] - Phase 2 HOLD Trap Fix: Extended Exploration & PM Action Floor
+
+#### Problem
+Phase 2 JAX training at update 1325/3051 (~43%) showed severe HOLD trap:
+- HOLD rate: 99.5%+ (should be 70-85%)
+- PM actions: 0.1-0.4% combined (should be >5%)
+- Policy loss: 0.0000 (converged to local optimum)
+- Despite 35% forced positions and exploration bonuses configured
+
+#### Root Cause Analysis
+1. **Exploration bonus expired at 30%** of training, but training was at 43% → PM bonuses = $0
+2. **No PM action floor** → agent could converge to 100% HOLD mathematically
+3. **Competing decay mechanisms** → reward function cut off at 30%, overriding curriculum multipliers
+4. **Base PM bonus too low** → $150 < entry bonus, but PM actions are completely novel
+
+#### Solution (4 Fixes)
+
+**Fix 1: Extended Exploration Horizon to 100%** (CRITICAL)
+- File: `env_phase2_jax.py:444`
+- Change: `exploration_horizon = params.total_training_timesteps * 1.0` (was 0.30)
+- Impact: Entry and PM bonuses now decay gradually across full training
+
+**Fix 2: Increased Base PM Bonus** (SUPPORTING)
+- File: `env_phase2_jax.py:117`
+- Change: `pm_action_exploration_bonus = 200.0` (was 150.0)
+- Impact: PM actions now receive stronger learning signal
+
+**Fix 3: Added 5% PM Action Floor** (CRITICAL)
+- File: `train_ppo_jax_fixed.py` in `masked_softmax()`
+- Change: Auto-detects Phase 2 (6 actions) and applies floor to indices 3,4,5
+- Impact: Mathematically prevents 100% HOLD; ensures >5% PM sampling
+
+**Fix 4: Increased Forced Position Ratios** (IMPORTANT)
+- File: `train_phase2_jax.py:593-612`
+- Changes:
+  - Phase 2A: 70% forced (was 50%)
+  - Phase 2B: 70%→20% decay (was 50%→10%)
+  - Phase 2B PM bonus: 100%→50% decay (was 100%→25%)
+  - Phase 2C: 10% forced (was 0%)
+- Impact: More positions = more PM learning opportunities
+
+#### Files Modified
+1. `src/jax_migration/env_phase2_jax.py`:
+   - Line 117: PM bonus $150 → $200
+   - Line 444: Exploration horizon 30% → 100%
+2. `src/jax_migration/train_ppo_jax_fixed.py`:
+   - Lines 119-177: Extended `masked_softmax()` with PM action floor
+3. `src/jax_migration/train_phase2_jax.py`:
+   - Lines 593-612: Increased forced position ratios and PM bonus retention
+
+#### Training Recommendation
+⚠️ **Start fresh training** rather than resuming from checkpoint 2400.
+The current model has converged to 99.5% HOLD with near-zero loss.
+Policy weights are locked into HOLD preference and unlikely to recover.
+
+#### Expected Results (with fixes)
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| HOLD rate | 99.5% | 70-85% |
+| PM actions | 0.3% | >5% |
+| Policy loss | 0.0000 | Non-zero |
+| Exploration bonus | $0 (expired) | Decays to $0 at 100% |
+
+#### Verification
+```bash
+# Quick test (500K steps)
+python -m src.jax_migration.train_phase2_jax --market NQ --num_envs 64 --total_timesteps 500000 --test
+
+# Success criteria:
+# - PM actions >3% by update 50
+# - HOLD rate <95% by update 50
+# - Policy loss non-zero
+```
+
+#### Additional Bugs Fixed (Post-Verification)
+
+After 500K test training revealed HOLD trap still occurred in Phase 2C, found and fixed 3 critical bugs:
+
+**Bug 1: Missing exploration_floor in collect_rollouts_phase2** (CRITICAL)
+- File: `train_phase2_jax.py:264-271, 291-299`
+- Problem: Function signature lacked `exploration_floor` parameter
+- Fix: Added parameter and passed it to `sample_action()` and `log_prob_action()`
+- Impact: **The 5% PM floor was never actually applied during training**
+
+**Bug 2: Missing exploration_floor in train_step call** (CRITICAL)
+- File: `train_phase2_jax.py:670-677`
+- Problem: `train_step()` called without `exploration_floor` parameter
+- Fix: Pass `current_floor` to `train_step()`
+- Impact: Floor not used in policy loss calculation
+
+**Bug 3: Hardcoded old PM bonus values** (MODERATE)
+- File: `train_phase2_jax.py:621-625`
+- Problem: Used $400 base instead of updated $200
+- Fix: Changed to `pm_bonus = 200.0 * pm_bonus_mult`
+- Impact: Curriculum showed wrong bonus values
+
+**Bug 4: Missing floor in logs** (MINOR)
+- File: `train_phase2_jax.py:725-730`
+- Problem: No visibility into exploration floor value
+- Fix: Added `Floor: X.X%` to training logs
+- Impact: Better transparency for debugging
+
+#### Test Results (Before Additional Fixes)
+- ✅ Early training: HOLD 56.8%, PM actions 22.6%
+- ❌ Late training: HOLD climbed to 98%, PM actions dropped to 1.0%
+- 🔍 **Root cause**: exploration_floor never passed to Phase 2 rollout collection
+
+---
+
+## [2025-10-28] - Standardize Model Directories
+### Changed
+- Standardized model checkpoint directory naming across all Phase 1-3 scripts (PyTorch & JAX) to `models/phase{N}_{framework}_{market}` (e.g., `models/phase1_jax_nq`).
+- Updated `train_phase1.py`, `train_phase2.py`, `train_phase3_llm.py`, `train_ppo_jax_fixed.py`, and `train_phase2_jax.py` to automatically include the market suffix in default paths.
+- Verified `main.py` compatibility with the new directory structure.
+
+---
+
+## [1.8.1] - 2025-12-07
+
+### [Date: 2025-12-07] - JAX Phase 2 Resume Functionality via main.py
+
+#### Problem
+Users had no way to resume JAX Phase 2 training from checkpoints through the interactive `main.py` menu, despite the backend `train_phase2_jax.py` having full `--resume` and `--resume-from` functionality already implemented. This meant users with interrupted training runs had to manually run CLI commands to continue training.
+
+#### Solution
+Integrated checkpoint detection and resume prompting into `main.py`:
+- **Automatic Checkpoint Detection**: Added `detect_phase2_checkpoints()` method that scans for Orbax checkpoints in `models/phase2_jax_{market}/`
+- **User-Friendly Resume Flow**: When checkpoints exist, users are prompted with:
+  - Checkpoint name and update number (e.g., `phase2_jax_2400`, update 2400)
+  - Option to resume from latest checkpoint (yes/no prompt)
+  - If resumed: Skips configuration prompts, passes `--resume` flag to training script
+  - If declined: Proceeds with standard fresh training workflow
+- **Intelligent Workflow**: Resume detection occurs after market selection but before configuration prompts, saving user time
+
+#### Added
+- **`detect_phase2_checkpoints()` method** in `main.py` (lines 2265-2290):
+  - Returns sorted list of available checkpoints and latest checkpoint name
+  - Handles missing directories and parsing errors gracefully
+  - Uses same logic as `find_latest_checkpoint()` from `train_phase2_jax.py`
+
+- **Automatic Timesteps Detection** in `run_jax_phase2()` (lines 2319-2347):
+  - Parses recent training logs to find "Total timesteps: X,XXX,XXX"
+  - Searches up to 3 most recent JAX Phase 2 log files
+  - Preserves curriculum phase automatically (2A-Boot, 2B-Int, 2C-Prod)
+  - Falls back to user input if detection fails
+  - Example: Detects 20M from logs → calculates progress = 2400/2441 = 98.3% → stays in 2C-Prod ✓
+
+#### Changed
+- **`run_jax_phase2()` method** in `main.py` (lines 2292-2342):
+  - Added checkpoint detection after script validation
+  - Displays formatted resume prompt with checkpoint details
+  - Builds `--resume-from` command with exact checkpoint name if user confirms
+  - Preserves full configuration workflow for fresh training
+  - Uses descriptive log filenames (`jax_phase2_{market}_resume.log`)
+
+#### Fixed
+- **EOFError on Resume**: Changed from `--resume` to `--resume-from {checkpoint_name}` to skip redundant confirmation prompt
+  - **Issue**: Backend `train_phase2_jax.py` prompted for confirmation again when using `--resume`, causing `EOFError` in non-interactive mode
+  - **Solution**: Pass specific checkpoint name with `--resume-from`, which bypasses the prompt (line 468 in `train_phase2_jax.py`)
+  - **Result**: Single confirmation in `main.py`, seamless resume without interaction errors
+
+- **Immediate Training Completion on Resume**: Added default `--total_timesteps 100000000` (100M) when resuming
+  - **Issue**: Checkpoint at update 2400 would complete immediately if total_timesteps was too low (e.g., default 1M = 122 updates)
+  - **Root Cause**: Original training used high timesteps (20M+), but resume used low defaults, causing `update 2400 > num_updates 122`
+  - **Solution**: Pass `--total_timesteps 100000000` when resuming to ensure training can continue beyond any checkpoint
+  - **Result**: Training continues from checkpoint with sufficient remaining updates
+
+#### User Experience
+**Before**:
+```bash
+# Manual CLI command required to resume
+python -m src.jax_migration.train_phase2_jax --market NQ --resume
+```
+
+**After** (via main.py):
+```
+[EXISTING CHECKPOINT DETECTED]
+Found checkpoint: phase2_jax_2400 (update 2400)
+Total checkpoints available: 3
+
+Resume training from this checkpoint? (Y/n): y
+
+Resuming training from update 2400...
+Note: Training will continue with the same configuration from the checkpoint.
+```
+
+#### Files Modified
+1. `main.py`:
+   - Added `detect_phase2_checkpoints()` method (26 lines)
+   - Enhanced `run_jax_phase2()` with checkpoint detection and resume logic (44 new lines)
+
+#### Technical Details
+- **Checkpoint Format**: `models/phase2_jax_{market}/phase2_jax_{update}/` (Orbax format)
+- **Normalizer Files**: `models/phase2_jax_{market}/normalizer_{update}.pkl`
+- **Backend Logic**: Leverages existing `--resume` flag in `train_phase2_jax.py` (lines 456-517)
+- **Safe**: Declining resume preserves existing checkpoints (no overwriting)
+
+#### Testing
+```bash
+# Test via main menu
+python main.py
+# Select: 6 (JAX Training) → 3 (JAX Phase 2 Training)
+# Expected: Checkpoint detected, resume prompt shown
+# Action: Answer 'y' to resume, 'n' for fresh training
+```
+
+#### Verification Checklist
+- ✅ Checkpoint detection works for markets with existing checkpoints
+- ✅ No prompt shown when no checkpoints exist
+- ✅ Resume continues from correct update number
+- ✅ Declining resume proceeds with configuration prompts
+- ✅ Log files use descriptive naming (`*_resume.log`)
+- ✅ Works with all markets (NQ, ES, YM, etc.)
+
+---
+
+## [1.8.0] - 2025-12-07
+
+### [Date: 2025-12-07] - JAX Phase 1 HOLD Trap Fix + Phase 2 Evaluator
+
+#### Problem
+1. **Phase 1 HOLD Trap**: Model converged to 94% HOLD rate after 8M steps because the exploration bonus and action floor decayed to zero prematurely (at 40% progress).
+2. **Missing JAX Evaluator**: No way to properly evaluate trained JAX Phase 2 models against fresh data using the synchronized environment logic.
+
+#### Solutions
+**1. Fixed "HOLD Trap" in Phase 1**
+- **Permanent Action Floor**: Enforced a minimum 5% probability for BUY and SELL actions *forever*. The model can no longer mathematicaly collapse to 100% HOLD.
+- **Extended Bonus Horizon**: Exploration bonus ($100) and action floor decay now extend over **100%** of the training run (20M steps) instead of 40%.
+- **Corrected Logging**: Fixed logging to report the actual bonus ($100) instead of the legacy value ($400).
+
+**2. Implemented JAX Phase 2 Evaluator**
+- Created `src/jax_migration/evaluate_phase2_jax.py`:
+  - Supports Orbax checkpoint loading.
+  - Uses synchronized `EnvPhase2` (matches real-time logic).
+  - Uses fresh 1-minute and 1-second data.
+- Integrated into `main.py` CLI (Option 7 -> 1).
+
+#### Files Modified
+- `src/jax_migration/train_ppo_jax_fixed.py`: Extended decay horizon, implemented 5% minimum floor.
+- `src/jax_migration/env_phase1_jax.py`: Extended exploration bonus horizon to 100%.
+- `src/jax_migration/evaluate_phase2_jax.py`: NEW file for evaluation.
+- `main.py`: Refactored `run_evaluation` to support JAX/PyTorch menu.
+
+## [1.7.0] - 2025-12-07
+
+### [Date: 2025-12-07] - Training/Real-Time Environment Synchronization
+
+#### Problem
+Model predictions showed 95% SELL rate in real-time due to **observation mismatch** between JAX training and Agent_temp real-time environments. Analysis revealed 3 critical discrepancies in how features were calculated.
+
+#### Root Cause Analysis
+| Feature | JAX Training (OLD) | Agent_temp Real-Time | Impact |
+|---------|-------------------|---------------------|--------|
+| `hour_norm` | `(hour-9.5)/(16.98-9.5)` | `hour/24.0` | Different scale |
+| `min_from_open` | `0.0-1.0` normalized | `0-449` raw minutes | 449x difference! |
+| `min_to_close` | `0.0-1.0` normalized | `0-449` raw minutes | 449x difference! |
+| `time_in_position` | `bars/390.0` normalized | raw bar count | 390x difference |
+| `can_enter` | checks RTH + position | only checks position | Different logic |
+
+#### Changed
+
+**1. data_loader.py** - Time Feature Calculation
+```python
+# OLD (normalized 0-1)
+hour_decimal = (hours - 9.5) / (16.98 - 9.5)
+min_from_open = ((hours - 9.5) * 60) / 449.0
+min_to_close = ((16.983 - hours) * 60) / 449.0
+
+# NEW (matches Agent_temp)
+hour_norm = timestamps.hour / 24.0
+min_from_open = current_minutes - 570  # RAW minutes
+min_to_close = 1019 - current_minutes  # RAW minutes
+```
+
+**2. env_phase1_jax.py** - time_in_position
+- Removed `/390.0` normalization to match Agent_temp raw bar count
+
+**3. env_phase2_jax.py** - time_in_position + can_enter
+- Removed `/390.0` normalization from `time_in_position`
+- Simplified `can_enter` to only check position (RTH check stays in action mask)
+
+#### Files Modified
+1. `src/jax_migration/data_loader.py`:
+   - Lines 31-64: `precompute_time_features()` rewritten
+2. `src/jax_migration/env_phase1_jax.py`:
+   - Lines 170-184: Removed `/390.0` from `time_in_position`
+3. `src/jax_migration/env_phase2_jax.py`:
+   - Line 173: Removed `/390.0` from `time_in_position`
+   - Lines 184-194: Simplified `can_enter` validity feature
+
+#### ⚠️ BREAKING CHANGE
+Existing model checkpoints are **INCOMPATIBLE** with this change. **All models must be retrained** to use the synchronized observation format.
+
+#### Expected Impact
+- Real-time predictions should match training behavior
+- Model should no longer collapse to single action (95% SELL → balanced distribution)
+
+---
+
+## [1.6.0] - 2025-12-07
+
+### [Date: 2025-12-07] - Critical Training Improvements: Reward Balance & Entropy
+
+#### Problem
+Training was producing poor results due to 5 root causes identified through comprehensive analysis:
+1. **Reward Scale Imbalance**: Exploration bonus ($400) was 8x larger than typical PnL signals ($50)
+2. **Entropy Collapse**: `ent_coef=0.01` caused 94% HOLD rate, entropy 0.07 (should be 0.3+)
+3. **Long Episode Issues**: 1500-bar episodes slowed learning cycles
+4. **Long Discount Horizon**: `gamma=0.99` was too long for trading decisions
+
+#### Changed
+
+**Phase 1 Environment** (`env_phase1_jax.py`):
+| Parameter | Old | New | Rationale |
+|-----------|-----|-----|-----------|
+| `base_bonus` (exploration) | $400 | **$100** | Was 8x larger than PnL signals |
+| `min_episode_bars` | 1500 | **400** | Faster learning cycles |
+
+**Phase 2 Environment** (`env_phase2_jax.py`):
+| Parameter | Old | New | Rationale |
+|-----------|-----|-----|-----------|
+| `entry_action_exploration_bonus` | $300 | **$100** | Align with Phase 1 |
+| `pm_action_exploration_bonus` | $400 | **$150** | PM actions get 50% premium |
+| `min_episode_bars` | 1500 | **400** | Faster learning cycles |
+
+**PPO Hyperparameters** (`train_ppo_jax_fixed.py`):
+| Parameter | Old | New | Rationale |
+|-----------|-----|-----|-----------|
+| `ent_coef` | 0.01 | **0.05** | Prevent entropy collapse |
+| `gamma` | 0.99 | **0.95** | Shorter trading horizon |
+
+#### Expected Impact
+| Metric | Before | Expected |
+|--------|--------|----------|
+| HOLD Rate | 94% | 60-70% |
+| Entropy | 0.07 | 0.3-0.5 |
+| Trade Quality | Overtrading | Selective |
+
+#### Files Modified
+1. `src/jax_migration/env_phase1_jax.py`:
+   - Line 85: `min_episode_bars` 1500 → 400
+   - Line 411: `base_bonus` $400 → $100
+2. `src/jax_migration/env_phase2_jax.py`:
+   - Line 93: `min_episode_bars` 1500 → 400
+   - Line 117-118: PM bonus $400→$150, Entry bonus $300→$100
+3. `src/jax_migration/train_ppo_jax_fixed.py`:
+   - Line 202: `gamma` 0.99 → 0.95
+   - Line 205: `ent_coef` 0.01 → 0.05
+
+---
+
+## [1.5.3] - 2025-12-07
+
+
+### [Date: 2025-12-07] - Enhanced Overtrading Prevention: Random Distribution & P&L Limits
+
+#### Problem
+Previous overtrading prevention with `MinBarsBetweenTrades = 3` allowed trades on bars 0, 3, 6, 9... clustering all 4 hourly trades at the beginning of the hour. User requested:
+1. Random distribution of trades across the full hour
+2. Daily P&L limits (loss and profit) to protect capital
+
+#### Added
+- **Probabilistic Trade Distribution**:
+  - New property `UseRandomDistribution` (default: true)
+  - Uses formula: `P(accept) = trades_remaining / bars_remaining_in_hour`
+  - Self-balancing: naturally spreads trades across the hour
+  - Catches up near hour end if trades unused
+  - Works WITH hourly hard cap, not instead of it
+
+- **Daily P&L Limits**:
+  - `DailyLossLimit` (default: $900) - Stop trading after cumulative loss
+  - `DailyProfitLimit` (default: $2000) - Stop trading after cumulative profit
+  - Set to 0 to disable either limit
+  - Tracks realized P&L only (closed trades)
+  - Resets at session start
+
+- **New State Variables**:
+  - `dailyPnL`: Running P&L for today
+  - `randomGenerator`: For probabilistic acceptance
+
+- **New Methods**:
+  - `GetTradesThisHour()`: Counts trades in current hour using LINQ
+
+#### Changed
+- **MinBarsBetweenTrades** default increased from 3 → 10 (per user request)
+- **CanEnterNewTrade()** now validates 6 checks in order:
+  1. Daily loss limit
+  2. Daily profit limit
+  3. Cooldown (10 bars, or 5 after loss)
+  4. Session limit (15/day)
+  5. Hourly hard cap (4/hour)
+  6. Probabilistic acceptance (random distribution)
+- **OnPositionUpdate()** now accumulates `dailyPnL` when trades close
+- **OnBarUpdate()** now resets `dailyPnL` at session start
+- Added `using System.Linq;` for LINQ Count() support
+
+#### Configuration Summary
+| Property | Default | Description |
+|----------|---------|-------------|
+| EnableOvertradingPrevention | true | Master toggle |
+| MinBarsBetweenTrades | **10** | Minimum cooldown (increased) |
+| MaxTradesPerSession | 15 | Daily hard cap |
+| MaxTradesPerHour | 4 | Hourly hard cap |
+| CooldownBarsAfterLoss | 5 | Extended cooldown after loss |
+| **UseRandomDistribution** | **true** | **NEW: Spread trades across hour** |
+| **DailyLossLimit** | **$900** | **NEW: Stop at $900 loss** |
+| **DailyProfitLimit** | **$2000** | **NEW: Stop at $2000 profit** |
+
+#### Probabilistic Distribution Example
+| Minute | Trades Left | Bars Left | Probability |
+|--------|-------------|-----------|-------------|
+| 0 | 4 | 60 | 6.7% |
+| 15 | 3 | 45 | 6.7% |
+| 30 | 2 | 30 | 6.7% |
+| 45 | 2 | 15 | 13.3% |
+| 55 | 2 | 5 | 40% |
+
+#### New Log Messages
+- `💔 SELL blocked: Daily loss limit ($-920.00 <= -$900.00)`
+- `🎉 BUY blocked: Daily profit limit reached ($2150.00 >= $2000.00)`
+- `🎲 BUY deferred: P=6.7%, Roll=0.42 (random distribution)`
+- `📊 Position closed | PnL: $125.00 | Daily: $340.00`
+
+---
+
+## [1.5.2] - 2025-12-07
+
+### [Date: 2025-12-07] - NinjaTrader Overtrading Prevention System (Initial)
+
+#### Problem
+Phase 2 JAX model entered trades on nearly every candle when flat, resulting in excessive trading (overtrading). This behavior was baked into the policy weights due to large exploration bonuses ($300 entry bonus) during training that incentivized trade entries too aggressively.
+
+#### Added
+- **Multi-Layer Overtrading Prevention** in `AIBridgeV2.cs`:
+  
+  **New Configuration Properties (5 properties):**
+  | Property | Default | Description |
+  |----------|---------|-------------|
+  | `EnableOvertradingPrevention` | true | Master toggle for all limits |
+  | `MinBarsBetweenTrades` | 3 | Minimum bars between entries (cooldown) |
+  | `MaxTradesPerSession` | 15 | Daily trade limit |
+  | `MaxTradesPerHour` | 4 | Rolling hourly trade limit |
+  | `CooldownBarsAfterLoss` | 5 | Extended cooldown after losing trade |
+
+  **New State Variables (6 variables):**
+  - `lastTradeBarIndex`: Bar index of last trade entry
+  - `tradesToday`: Session trade counter
+  - `lastTradeTime`: Timestamp of last trade
+  - `recentTrades`: Queue for rolling hourly limit tracking
+  - `lastTradeWasLoss`: Tracks if last trade was a loss for extended cooldown
+  - `sessionStartDate`: For daily counter reset
+
+  **New Methods (3 methods):**
+  - `CanEnterNewTrade()`: Validates all overtrading rules before allowing entry
+  - `RecordTradeEntry()`: Updates counters after successful entry
+  - `CleanupOldTrades()`: Removes trades older than 1 hour from queue
+
+---
+
 ## [1.5.1] - 2025-12-04
 
 ### [Date: 2025-12-04] - Phase 2 HOLD Trap Fix: Forced Position Curriculum

@@ -439,6 +439,8 @@ def apply_hardware_profile(config: dict, profile_data: dict, test_mode: bool):
 
 def find_data_file(market=None):
     """Find training data file with priority order.
+    
+    TRAIN/TEST SPLIT: Prefers *_train.csv files for training.
 
     Args:
         market: Market identifier (e.g., 'ES', 'NQ') or None for auto-detect
@@ -450,8 +452,13 @@ def find_data_file(market=None):
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(script_dir, 'data')
 
-    # If market is specified and not GENERIC, look for market-specific file first
+    # TRAIN/TEST SPLIT: Try train-specific file first
     if market and market != 'GENERIC':
+        train_file = os.path.join(data_dir, f'{market}_D1M_train.csv')
+        if os.path.exists(train_file):
+            safe_print(f"[DATA] Using TRAIN data (80%): {train_file}")
+            return train_file
+        # Fall back to full market file
         market_file = os.path.join(data_dir, f'{market}_D1M.csv')
         if os.path.exists(market_file):
             return market_file
@@ -470,7 +477,14 @@ def find_data_file(market=None):
         if os.path.exists(path):
             return path
 
-    # Fallback: look for instrument-prefixed files like ES_D1M.csv, NQ_D1M.csv, etc.
+    # TRAIN/TEST SPLIT: Search for train files first
+    train_pattern = os.path.join(data_dir, '*_D1M_train.csv')
+    train_files = sorted(glob.glob(train_pattern))
+    if train_files:
+        safe_print(f"[DATA] Using TRAIN data (80%): {train_files[0]}")
+        return train_files[0]
+
+    # Fall back to full data files
     pattern = os.path.join(data_dir, '*_D1M.csv')
     instrument_files = sorted(glob.glob(pattern))
     if instrument_files:
@@ -1209,8 +1223,10 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
     safe_print()
 
     # Create directories
-    os.makedirs('models/phase2', exist_ok=True)
-    os.makedirs('models/phase2/checkpoints', exist_ok=True)
+    # FIX: Use market-specific directory
+    model_dir = f'models/phase2_{market_name.lower()}'
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(f'{model_dir}/checkpoints', exist_ok=True)
     os.makedirs('logs/phase2', exist_ok=True)
     os.makedirs('tensorboard_logs/phase2', exist_ok=True)
 
@@ -1384,7 +1400,7 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         callback_after_eval=eval_metric_hook,      # Must be BaseCallback for EventCallback API
         eval_freq=PHASE2_CONFIG['eval_freq'],
         n_eval_episodes=PHASE2_CONFIG['n_eval_episodes'],
-        best_model_save_path='./models/phase2/',
+        best_model_save_path=f'./models/phase2_{market_name.lower()}/',
         log_path=eval_log_path,  # IMPROVEMENT: Versioned log path
         deterministic=True,
         render=False,

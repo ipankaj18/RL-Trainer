@@ -172,10 +172,12 @@ def compute_observation_shape(env_params) -> int:
     phase2_dims = 0
     if hasattr(env_params, 'trail_activation_mult'):
         # Has Phase 2 specific params
-        # 6 features total:
-        #   - 3 PM state: trailing_stop_active, unrealized_pnl, be_move_count
+        # FIX (2025-12-10): Updated from 6 to 8 for Apex compliance features
+        # 8 features total:
+        #   - 5 PM state: trailing_stop_active, unrealized_pnl, be_move_count, 
+        #                 drawdown_ratio (NEW), drawdown_room (NEW)
         #   - 3 validity: can_enter, can_manage, has_position
-        phase2_dims = 6
+        phase2_dims = 8
     
     total = market_dims + position_dims + phase2_dims
     return total

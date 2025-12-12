@@ -161,7 +161,7 @@ class RLTrainerMenu:
             "",
             f"{Colors.CYAN}{Colors.BOLD}{'═' * 78}{Colors.RESET}",
             f"{Colors.CYAN}{Colors.BOLD}  Reinforcement Learning Trading System - Interactive Menu Interface{Colors.RESET}",
-            f"{Colors.CYAN}{Colors.BOLD}  Version 1.0.0 - October 2025{Colors.RESET}",
+            f"{Colors.CYAN}{Colors.BOLD}  Version 1.9.7 - December 2025{Colors.RESET}",
             f"{Colors.CYAN}{Colors.BOLD}{'═' * 78}{Colors.RESET}",
             "",
             f"{Colors.GREEN}{Colors.BOLD}Welcome to RL TRAINER! Your comprehensive trading system management tool.{Colors.RESET}",
@@ -1210,12 +1210,40 @@ class RLTrainerMenu:
         return True
 
     def continue_training_from_model(self):
-        """Continue Phase 1 or Phase 3 training from an existing checkpoint."""
+        """Continue Phase 1, Phase 2 (JAX), or Phase 3 training from an existing checkpoint."""
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}║           CONTINUE TRAINING FROM EXISTING MODEL              ║{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
 
-        # Lazy import to avoid bootstrap dependency issues
+        # Check for JAX Phase 2 checkpoints
+        jax_phase2_checkpoints = self._find_jax_phase2_checkpoints()
+        has_jax_phase2 = len(jax_phase2_checkpoints) > 0
+
+        # Show phase selection menu
+        print(f"\n{Colors.BOLD}SELECT PHASE TO CONTINUE:{Colors.RESET}")
+        print(f"{Colors.CYAN}  1. Phase 1 (Entry Learning) - PyTorch{Colors.RESET}")
+        print(f"{Colors.CYAN}  2. Phase 3 (Hybrid LLM) - PyTorch{Colors.RESET}")
+        if has_jax_phase2:
+            print(f"{Colors.GREEN}  3. Phase 2 (Position Management) - JAX{Colors.RESET}")
+        print(f"{Colors.CYAN}  4. Back{Colors.RESET}")
+
+        valid_choices = ["1", "2", "4"]
+        if has_jax_phase2:
+            valid_choices.insert(2, "3")
+
+        choice = get_user_input(
+            f"\n{Colors.YELLOW}Select option (1-{'4' if has_jax_phase2 else '4'}): {Colors.RESET}",
+            valid_choices
+        )
+
+        if choice is None or choice == "4":
+            print(f"{Colors.YELLOW}Continuation cancelled.{Colors.RESET}")
+            return False
+
+        if choice == "3" and has_jax_phase2:
+            return self._continue_jax_phase2(jax_phase2_checkpoints)
+
+        # For Phase 1 and Phase 3, use existing model detection
         from src.model_utils import detect_models_in_folder, display_model_selection
 
         models = detect_models_in_folder(str(self.project_dir / "models"))
@@ -1223,9 +1251,16 @@ class RLTrainerMenu:
             print(f"{Colors.RED}No models found in models/. Train a phase first.{Colors.RESET}")
             return False
 
-        supported_models = [m for m in models if m['type'] in ('phase1', 'phase3')]
+        # Filter based on choice
+        if choice == "1":
+            supported_models = [m for m in models if m['type'] == 'phase1']
+        elif choice == "2":
+            supported_models = [m for m in models if m['type'] == 'phase3']
+        else:
+            supported_models = []
+
         if not supported_models:
-            print(f"{Colors.RED}No Phase 1 or Phase 3 models available for continuation.{Colors.RESET}")
+            print(f"{Colors.RED}No models available for continuation.{Colors.RESET}")
             print(f"{Colors.YELLOW}Train a model first or copy checkpoints into models/.{Colors.RESET}")
             return False
 
@@ -1315,6 +1350,153 @@ class RLTrainerMenu:
         return success
 
     def run_evaluation(self):
+        """Evaluate trained models (JAX Phase 2 or PyTorch Phase 3)."""
+        print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}║                         EVALUATOR                              ║{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.CYAN}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+        
+        print(f"\n{Colors.BOLD}SELECT EVALUATION TYPE:{Colors.RESET}")
+        print(f"{Colors.CYAN}  1. JAX Phase 2 (Fresh Data, 1-min + 1-sec) - ⭐ RECOMMENDED{Colors.RESET}")
+        print(f"{Colors.CYAN}  2. PyTorch Phase 3 (Legacy/Hybrid){Colors.RESET}")
+        print(f"{Colors.CYAN}  3. Back{Colors.RESET}")
+        
+        choice = get_user_input(
+            f"\n{Colors.YELLOW}Select option (1-3): {Colors.RESET}",
+            ["1", "2", "3"]
+        )
+        
+        if choice == "1":
+            return self._run_jax_evaluation()
+        elif choice == "2":
+            return self._run_pytorch_evaluation()
+        else:
+            return False
+
+    def _run_jax_evaluation(self):
+        """Run JAX Phase 2 evaluation pipeline."""
+        print(f"\n{Colors.BOLD}{Colors.GREEN}JAX Phase 2 Evaluation{Colors.RESET}")
+        
+        # 1. Market Selection
+        market = detect_and_select_market(self.project_dir)
+        if not market:
+            return False
+            
+        # 2. Model Selection
+        # Look for checkpoints in models/phase2_jax_{market_lower}
+        models_dir = self.project_dir / "models" / f"phase2_jax_{market.lower()}"
+        if not models_dir.exists():
+            print(f"{Colors.RED}No JAX Phase 2 models found for {market} ({models_dir}){Colors.RESET}")
+            return False
+            
+        print(f"\n{Colors.CYAN}Scanning for checkpoints in {models_dir}...{Colors.RESET}")
+        # Checkpoints are usually subdirectories or files depending on save format
+        # Orbax saves as directories usually
+        checkpoints = sorted([d for d in models_dir.iterdir() if d.is_dir() and "phase2_jax_" in d.name], key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        if not checkpoints:
+             print(f"{Colors.RED}No checkpoints found.{Colors.RESET}")
+             return False
+             
+        print(f"\n{Colors.BOLD}AVAILABLE CHECKPOINTS:{Colors.RESET}")
+        ckpt_map = {}
+        for idx, ckpt in enumerate(checkpoints[:10], 1): # Show top 10 recent
+            ckpt_map[str(idx)] = ckpt
+            print(f"{Colors.CYAN}  {idx}. {ckpt.name}{Colors.RESET}")
+            
+        ckpt_choice = get_user_input(
+            f"\n{Colors.YELLOW}Select checkpoint (1-{len(ckpt_map)}): {Colors.RESET}",
+            list(ckpt_map.keys())
+        )
+        if not ckpt_choice: return False
+        selected_ckpt = ckpt_map[ckpt_choice]
+        
+        # 3. Data Selection (Fresh Data)
+        print(f"\n{Colors.BOLD}{Colors.YELLOW}SELECT EVALUATION DATA:{Colors.RESET}")
+        # Look for data files
+        data_dir = self.project_dir / "data"
+        data_files = sorted(list(data_dir.glob("*_D1M*.csv")))  # Include train/test
+        
+        # Categorize files for clearer display
+        data_map = {}
+        for idx, f in enumerate(data_files, 1):
+            data_map[str(idx)] = f
+            # Show clear labels for train/test/full
+            if "_test.csv" in f.name:
+                label = f"{Colors.GREEN}✓ [TEST - UNSEEN]{Colors.RESET}"
+            elif "_train.csv" in f.name:
+                label = f"{Colors.YELLOW}⚠️ [TRAIN - NOT FOR EVAL]{Colors.RESET}"
+            else:
+                label = f"{Colors.CYAN}[FULL]{Colors.RESET}"
+            print(f"{Colors.CYAN}  {idx}. {f.name}{Colors.RESET} {label}")
+        
+        print(f"\n{Colors.GREEN}  Tip: Choose *_test.csv for proper evaluation on unseen data{Colors.RESET}")
+            
+        data_choice = get_user_input(
+            f"\n{Colors.YELLOW}Select 1-minute data file (1-{len(data_map)}): {Colors.RESET}",
+            list(data_map.keys())
+        )
+        if not data_choice: return False
+        selected_data_1m = data_map[data_choice]
+        
+        # Try to auto-select matching 1s data (train/test aware)
+        if "_test.csv" in selected_data_1m.name:
+            expected_1s = selected_data_1m.name.replace("_D1M_test.csv", "_D1S_test.csv")
+        elif "_train.csv" in selected_data_1m.name:
+            expected_1s = selected_data_1m.name.replace("_D1M_train.csv", "_D1S_train.csv")
+        else:
+            expected_1s = selected_data_1m.name.replace("_D1M.csv", "_D1S.csv")
+        selected_data_1s = data_dir / expected_1s
+        if selected_data_1s.exists():
+            print(f"{Colors.GREEN}  ✓ Auto-detected 1-second data: {expected_1s}{Colors.RESET}")
+        else:
+            print(f"{Colors.YELLOW}  ⚠️ 1-second data not found ({expected_1s}). Intra-bar drawdown will be approximate.{Colors.RESET}")
+            selected_data_1s = None
+
+        # 4. Episodes (FIX 2025-12-12: Default was "1" but shown as "10", now using 50 for statistical significance)
+        episodes = get_user_input(f"{Colors.YELLOW}Number of episodes/runs (default 50): {Colors.RESET}")
+        episodes = episodes if episodes and episodes.isdigit() else "50"
+        
+        # 5. Run it
+        print(f"\n{Colors.CYAN}Starting evaluation...{Colors.RESET}")
+        script = self.src_dir / "jax_migration" / "evaluate_phase2_jax.py"
+        
+        command = [
+            sys.executable, str(script),
+            "--model-path", str(selected_ckpt),
+            "--data-path-1m", str(selected_data_1m),
+            "--market", market,
+            "--episodes", episodes
+        ]
+        
+        if selected_data_1s:
+            command.extend(["--data-path-1s", str(selected_data_1s)])
+            
+        success, _ = run_command_with_progress(
+            command,
+            "JAX Phase 2 Evaluation",
+            "jax_eval_phase2.log"
+        )
+        
+        if success:
+             print(f"\n{Colors.GREEN}✓ Evaluation complete! Check results/evaluation/eval_summary.json{Colors.RESET}")
+             try:
+                 # Print the summary here
+                 results_file = self.project_dir / "results" / "evaluation" / "eval_summary.json"
+                 if results_file.exists():
+                     with open(results_file, 'r') as f:
+                         summary = json.load(f)
+                     print(f"\n{Colors.BOLD}SUMMARY:{Colors.RESET}")
+                     print(f"  Win Rate: {summary['win_rate']*100:.1f}%")
+                     print(f"  Total PnL: ${summary['total_pnl']:,.2f}")
+                     print(f"  Trades: {summary['total_trades']}")
+             except:
+                 pass
+        else:
+             print(f"{Colors.RED}Evaluation failed. Check logs.{Colors.RESET}")
+             
+        return success
+
+    def _run_pytorch_evaluation(self):
         """Evaluate the latest Phase 3 model (261D pure RL) on unseen data."""
         print(f"\n{Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
         print(f"{Colors.BOLD}{Colors.CYAN}║                         EVALUATOR                              ║{Colors.RESET}")
@@ -2080,13 +2262,26 @@ class RLTrainerMenu:
 
         print(f"\n{Colors.CYAN}Starting JAX Phase 1 training for {market}...{Colors.RESET}\n")
 
+        # TRAIN/TEST SPLIT: Prefer train-specific data file
+        train_data = self.project_dir / "data" / f"{market}_D1M_train.csv"
+        full_data = self.project_dir / "data" / f"{market}_D1M.csv"
+        if train_data.exists():
+            data_path = str(train_data)
+            print(f"{Colors.GREEN}Using TRAIN data (80%): {train_data.name}{Colors.RESET}")
+        elif full_data.exists():
+            data_path = str(full_data)
+            print(f"{Colors.YELLOW}Using full data (no train/test split){Colors.RESET}")
+        else:
+            print(f"{Colors.RED}No market data found for {market}{Colors.RESET}")
+            return False
+
         # Run as module to support relative imports
         command = [
             sys.executable, "-m", module_name,
             "--market", market,
             "--num_envs", str(num_envs),
             "--total_timesteps", str(timesteps),
-            "--data_path", str(self.project_dir / "data" / f"{market}_D1M.csv")
+            "--data_path", data_path
         ]
 
         success, _ = run_command_with_progress(
@@ -2095,6 +2290,32 @@ class RLTrainerMenu:
             f"jax_phase1_{market.lower()}.log"
         )
         return success
+
+    def detect_phase2_checkpoints(self, market: str) -> Tuple[List[str], Optional[str]]:
+        """Detect available JAX Phase 2 checkpoints for a market.
+        
+        Args:
+            market: Market symbol (e.g., 'NQ', 'ES')
+            
+        Returns:
+            (checkpoint_list, latest_checkpoint_name) or ([], None) if no checkpoints found
+        """
+        checkpoint_dir = self.project_dir / "models" / f"phase2_jax_{market.lower()}"
+        
+        if not checkpoint_dir.exists():
+            return [], None
+        
+        try:
+            checkpoints = sorted([
+                d.name for d in checkpoint_dir.iterdir()
+                if d.is_dir() and d.name.startswith("phase2_jax_") and not d.name.endswith("_final")
+            ], key=lambda x: int(x.split("_")[-1]))
+            
+            latest = checkpoints[-1] if checkpoints else None
+            return checkpoints, latest
+        except Exception as e:
+            print(f"{Colors.YELLOW}Warning: Error detecting checkpoints: {e}{Colors.RESET}")
+            return [], None
 
     def run_jax_phase2(self):
         """Run JAX Phase 2 training with hardware profile support."""
@@ -2107,6 +2328,100 @@ class RLTrainerMenu:
             print(f"{Colors.RED}JAX Phase 2 script not found: {script}{Colors.RESET}")
             return False
 
+        # Check for existing checkpoints
+        checkpoints, latest_checkpoint = self.detect_phase2_checkpoints(market)
+        
+        if latest_checkpoint:
+            step_num = int(latest_checkpoint.split("_")[-1])
+            print(f"\n{Colors.YELLOW}╔══════════════════════════════════════════════════════════════╗{Colors.RESET}")
+            print(f"{Colors.YELLOW}║              EXISTING CHECKPOINT DETECTED                    ║{Colors.RESET}")
+            print(f"{Colors.YELLOW}╚══════════════════════════════════════════════════════════════╝{Colors.RESET}")
+            print(f"\n{Colors.CYAN}Found checkpoint: {Colors.BOLD}{latest_checkpoint}{Colors.RESET} (update {step_num})")
+            
+            if len(checkpoints) > 1:
+                print(f"{Colors.CYAN}Total checkpoints available: {len(checkpoints)}{Colors.RESET}")
+            
+            should_resume = prompt_confirm("Resume training from this checkpoint?", default_yes=True)
+            
+            if should_resume:
+                # Try to auto-detect original timesteps from logs
+                detected_timesteps = None
+                log_dir = self.logs_dir
+                
+                if log_dir.exists():
+                    # Look for recent JAX Phase 2 log files
+                    log_files = sorted(
+                        log_dir.glob(f"jax_phase2_{market.lower()}*.log"),
+                        key=lambda x: x.stat().st_mtime,
+                        reverse=True
+                    )
+                    
+                    # Search first 3 most recent logs
+                    for log_file in log_files[:3]:
+                        try:
+                            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                                for line in f:
+                                    if "Total timesteps:" in line:
+                                        # Extract number like "Total timesteps: 20,000,000"
+                                        import re
+                                        match = re.search(r'Total timesteps:\s*([0-9,]+)', line)
+                                        if match:
+                                            timesteps_str = match.group(1).replace(',', '')
+                                            detected_timesteps = int(timesteps_str)
+                                            print(f"\n{Colors.GREEN}✓ Auto-detected original timesteps: {detected_timesteps:,} from logs{Colors.RESET}")
+                                            break
+                            if detected_timesteps:
+                                break
+                        except Exception:
+                            continue
+                
+                # If detection failed, prompt user
+                if not detected_timesteps:
+                    print(f"\n{Colors.YELLOW}Could not auto-detect original timesteps from logs.{Colors.RESET}")
+                    print(f"{Colors.CYAN}To preserve the training curriculum phase, specify the original total timesteps.{Colors.RESET}")
+                    print(f"{Colors.CYAN}Common values: 10M, 20M, 50M, 100M{Colors.RESET}")
+                    print(f"{Colors.CYAN}Checkpoint is at update {step_num}. If unsure, use a high value like 50M or 100M.{Colors.RESET}\n")
+                    
+                    timestep_input = get_user_input(
+                        f"{Colors.YELLOW}Enter total timesteps in millions (e.g., '20' for 20M) or press Enter for 100M default: {Colors.RESET}"
+                    )
+                    
+                    if timestep_input and timestep_input.isdigit():
+                        total_timesteps = int(timestep_input) * 1_000_000
+                    else:
+                        total_timesteps = 100_000_000  # Default 100M
+                else:
+                    total_timesteps = detected_timesteps
+                
+                print(f"\n{Colors.GREEN}Resuming training from update {step_num}...{Colors.RESET}")
+                print(f"{Colors.CYAN}Total timesteps: {total_timesteps:,} ({total_timesteps // 1_000_000}M){Colors.RESET}")
+                print(f"{Colors.CYAN}This will preserve the original curriculum phase.{Colors.RESET}\n")
+                
+                # Build command with --resume-from flag and detected/user-specified timesteps
+                # TRAIN/TEST SPLIT: Prefer train-specific data file
+                train_data = self.project_dir / "data" / f"{market}_D1M_train.csv"
+                full_data = self.project_dir / "data" / f"{market}_D1M.csv"
+                data_path = str(train_data) if train_data.exists() else str(full_data)
+                
+                command = [
+                    sys.executable, "-m", "src.jax_migration.train_phase2_jax",
+                    "--data_path", data_path,
+                    "--checkpoint_dir", str(self.project_dir / "models" / f"phase2_jax_{market.lower()}"),
+                    "--market", market,
+                    "--total_timesteps", str(total_timesteps),
+                    "--resume-from", latest_checkpoint
+                ]
+                
+                success, _ = run_command_with_progress(
+                    command,
+                    f"JAX Phase 2 Training (Resume from update {step_num})",
+                    f"jax_phase2_{market.lower()}_resume.log"
+                )
+                return success
+            else:
+                print(f"\n{Colors.YELLOW}Starting fresh training (existing checkpoints will be preserved)...{Colors.RESET}\n")
+
+        # Standard training workflow (if not resuming or no checkpoints found)
         # Hardware Profile Selection
         hardware_profile = select_hardware_profile(self.project_dir)
         num_envs = None
@@ -2188,12 +2503,19 @@ class RLTrainerMenu:
 
         print(f"\n{Colors.CYAN}Starting JAX Phase 2 training for {market}...{Colors.RESET}\n")
 
+        # TRAIN/TEST SPLIT: Prefer train-specific data file
+        train_data = self.project_dir / "data" / f"{market}_D1M_train.csv"
+        full_data = self.project_dir / "data" / f"{market}_D1M.csv"
+        data_path = str(train_data) if train_data.exists() else str(full_data)
+        if train_data.exists():
+            print(f"{Colors.GREEN}Using TRAIN data (80%): {train_data.name}{Colors.RESET}")
+
         # Run as module to support relative imports
         command = [
             sys.executable, "-m", "src.jax_migration.train_phase2_jax",
             "--num_envs", str(num_envs),
             "--total_timesteps", str(timesteps),
-            "--data_path", str(self.project_dir / "data" / f"{market}_D1M.csv"),
+            "--data_path", data_path,
             "--checkpoint_dir", str(self.project_dir / "models" / f"phase2_jax_{market.lower()}")
         ]
 

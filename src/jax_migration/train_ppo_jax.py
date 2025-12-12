@@ -1,11 +1,32 @@
 """
-PureJAX PPO Training Loop
+⚠️ DEPRECATED - 2025-12-08
+
+This file has been superseded by train_ppo_jax_fixed.py.
+DO NOT USE THIS FILE FOR TRAINING.
+
+This file is kept for historical reference only.
+Use train_ppo_jax_fixed.py for Phase 1 JAX training.
+
+Issues with this file:
+- Missing observation normalization
+- Missing curriculum learning
+- Missing exploration bonus
+- Missing proper metrics tracking
+
+PureJAX PPO Training Loop (LEGACY)
 
 End-to-end GPU training using JAX with no CPU-GPU data movement.
 Implements PPO with action masking for the trading environment.
 
 Based on PureJaxRL patterns with custom modifications for trading.
 """
+
+import warnings
+warnings.warn(
+    "train_ppo_jax.py is DEPRECATED. Use train_ppo_jax_fixed.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import jax
 import jax.numpy as jnp

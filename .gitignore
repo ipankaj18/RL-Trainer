@@ -62,6 +62,7 @@ htmlcov/
 logs/*
 !logs/.gitkeep
 *.log
+!logs/*.log
 
 # TensorBoard
 tensorboard_logs/*

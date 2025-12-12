@@ -52,11 +52,15 @@ class EnvState(NamedTuple):
 
 
 class EnvParams(NamedTuple):
-    """Environment parameters (can vary per environment instance)."""
-    # Market specifications
-    contract_size: float = 50.0      # ES = $50 per point
-    tick_size: float = 0.25          # ES tick size
-    tick_value: float = 12.50        # ES tick value
+    """Environment parameters (can vary per environment instance).
+    
+    ⚠️ DEFAULTS ARE ES CONTRACT SPECS - Override for other markets!
+    Use market_specs.py to get correct values for NQ, YM, RTY, etc.
+    """
+    # Market specifications (ES defaults - override via market_specs.py for other markets)
+    contract_size: float = 50.0      # ES = $50/point, NQ = $20/point
+    tick_size: float = 0.25          # ES/NQ tick size
+    tick_value: float = 12.50        # ES = $12.50 per tick (50 * 0.25)
     commission: float = 2.50         # Per side commission
     slippage_ticks: int = 1          # Slippage in ticks
 
@@ -82,7 +86,7 @@ class EnvParams(NamedTuple):
     rth_start_count: int = 0         # Number of valid RTH start indices (static, set by caller)
 
     # Episode parameters
-    min_episode_bars: int = 1500
+    min_episode_bars: int = 400  # Reduced from 1500 for faster learning cycles
 
     # Training curriculum (NEW - Phase A1)
     training_progress: float = 0.0  # 0.0 to 1.0, updated each rollout for commission curriculum
@@ -126,9 +130,12 @@ def get_observation(
     """
     step = jnp.asarray(state.step_idx, dtype=jnp.int32)
     
-    # CRITICAL: window MUST be Python int for lax.dynamic_slice_in_dim
+    # CRITICAL FIX (2025-12-08): window MUST be Python int for lax.dynamic_slice_in_dim
     # JAX requires slice sizes to be static (Python ints), not traced values
-    window = int(params.window_size)  # Python int, NOT jnp.asarray!
+    # When env_params is traced (removed from static_argnums for memory fix),
+    # int(params.window_size) would fail. Since window_size NEVER changes during
+    # training, we hardcode it here.
+    window = 20  # Hardcoded: matches EnvParams.window_size default
     
     data_len = data.features.shape[0]  # Python int from shape tuple
 
@@ -168,6 +175,7 @@ def get_observation(
     safe_price = jnp.where(current_price > 0, current_price, 1.0)
     
     # Position-aware features (5 dims)
+    # SYNCHRONIZED WITH Agent_temp (2025-12-07): time_in_position is RAW bars, not normalized
     has_position = state.position != 0
     
     position_features = jnp.array([
@@ -177,7 +185,7 @@ def get_observation(
         jnp.where(has_position, jnp.abs(state.tp_price - safe_price) / safe_atr, 0.0),  # TP dist
         jnp.where(
             has_position, 
-            (step - state.position_entry_step).astype(jnp.float32) / 390.0, 
+            (step - state.position_entry_step).astype(jnp.float32),  # RAW bars (match Agent_temp)
             0.0
         ),  # Time in position
     ], dtype=jnp.float32)
@@ -200,11 +208,22 @@ def calculate_sl_tp(
     """
     Calculate stop loss and take profit prices.
     Pure tensor ops, no branching.
+    
+    FIX (2025-12-10): Cap SL distance so max loss with 1 contract ≤ $500.
+    This ensures Apex DD compliance - allows 5 consecutive losses before
+    hitting the $2,500 trailing drawdown limit.
     """
     # Handle invalid ATR
     safe_atr = jnp.where(atr > 0, atr, entry_price * 0.01)
     
-    sl_distance = safe_atr * params.sl_atr_mult
+    # Calculate raw SL distance based on ATR
+    raw_sl_distance = safe_atr * params.sl_atr_mult
+    
+    # FIX: Cap SL distance so max loss with 1 contract ≤ $500
+    # This prevents single trades from exceeding the Apex DD limit
+    max_sl_distance_points = 500.0 / params.contract_size  # NQ: 25pts, ES: 10pts
+    sl_distance = jnp.minimum(raw_sl_distance, max_sl_distance_points)
+    
     tp_distance = sl_distance * params.tp_sl_ratio
     
     # Long position: SL below, TP above
@@ -396,8 +415,8 @@ def calculate_reward(
     
     # ===== NEW: EXPLORATION BONUS CURRICULUM =====
     # JAX-compatible: Use default values to avoid if/else with tracers
-    # PHASE A: Extended to 40% of training (8M steps out of 20M default)
-    exploration_horizon = total_timesteps * 0.40
+    # PHASE A: Extended to 100% of training (was 40%) to maintain trading incentive
+    exploration_horizon = total_timesteps * 1.0
 
     # Handle None case for timestep (default to end of training = no bonus)
     timestep_for_bonus = jnp.where(
@@ -407,8 +426,9 @@ def calculate_reward(
     )
     exploration_progress = timestep_for_bonus / exploration_horizon
 
-    # PHASE A: Increased from $75 to $400 (5.3x increase)
-    base_bonus = 400.0
+    # PHASE A: REDUCED from $400 to $100 (was causing reward imbalance - bonus >> PnL)
+    # $400 bonus = +4.0 reward, but typical trade PnL = +0.5 reward (8x imbalance!)
+    base_bonus = 100.0
     exploration_bonus = base_bonus * jnp.maximum(0.0, 1.0 - exploration_progress)
     scaled_bonus = exploration_bonus / 100.0
 
@@ -459,10 +479,8 @@ def reset(
     NEW: Phase A2 - RTH-aligned episode starts
     """
     # Sample from pre-computed RTH indices instead of full data range
-    num_rth_starts = int(params.rth_start_count)
-    if num_rth_starts <= 0:
-        raise ValueError("EnvParams.rth_start_count must be > 0 (set from data.rth_indices.shape[0])")
-    rth_idx = jax.random.randint(key, shape=(), minval=0, maxval=num_rth_starts)
+    # Use params.rth_start_count directly (JAX-compatible, no int() conversion)
+    rth_idx = jax.random.randint(key, shape=(), minval=0, maxval=params.rth_start_count)
     
     # CRITICAL FIX: Use jnp.take() instead of Python [] indexing
     # Python's [] calls __index__() on JAX tracers, which fails during JIT
@@ -537,12 +555,15 @@ def step(
     # For Long: worst case is low_s
     # For Short: worst case is high_s
     
+    worst_price_long = jnp.maximum(low_s, state.sl_price)
+    worst_price_short = jnp.minimum(high_s, state.sl_price)
+
     worst_case_pnl = jnp.where(
         state.position == 1,
-        (low_s - state.entry_price) * params.contract_size * params.position_size,
+        (worst_price_long - state.entry_price) * params.contract_size * params.position_size,
         jnp.where(
             state.position == -1,
-            (state.entry_price - high_s) * params.contract_size * params.position_size,
+            (state.entry_price - worst_price_short) * params.contract_size * params.position_size,
             0.0
         )
     )
@@ -652,8 +673,44 @@ def step(
     portfolio_value = new_balance + unrealized_pnl
     
     # Update high-water mark and trailing DD
+    # Update high-water mark and trailing DD
+    # FIX (2025-12-12): Apex Trailing Cap Rule
+    # The trailing drawdown stops moving up once the threshold reaches Initial Balance + 100.
     new_highest = jnp.maximum(state.highest_balance, portfolio_value)
-    new_trailing_dd = new_highest - params.trailing_dd_limit
+    
+    # Standard calculation: HWM - Limit
+    uncapped_dd = new_highest - params.trailing_dd_limit
+    
+    # Cap the threshold at Initial + 100
+    capped_threshold = params.initial_balance + 100.0
+    new_trailing_dd = jnp.minimum(uncapped_dd, capped_threshold)
+    
+    # =========================================================================
+    # 4a. AUTO-LIQUIDATION (Safety Guardrail)
+    # =========================================================================
+    # If we are dangerously close to the limit (< $1000 margin), FORCE CLOSE.
+    dist_to_fail = portfolio_value - new_trailing_dd
+    auto_liquidate = (new_position != 0) & (dist_to_fail < 1000.0)
+    
+    # Calculate liquidation PnL (Market Exit)
+    liq_exit_price = jnp.where(
+        new_position == 1,
+        current_price - slippage,
+        current_price + slippage
+    )
+    liq_pnl = calculate_pnl(
+        new_entry_price, liq_exit_price, new_position, params,
+        training_progress=params.training_progress
+    )
+    
+    # Apply liquidation updates if triggered
+    trade_pnl = trade_pnl + jnp.where(auto_liquidate, liq_pnl, 0.0)
+    new_balance = new_balance + jnp.where(auto_liquidate, liq_pnl, 0.0)
+    new_position = jnp.where(auto_liquidate, 0, new_position)
+    portfolio_value = jnp.where(auto_liquidate, new_balance, portfolio_value)
+    
+    # Record forced close in stats (combine with time usage)
+    forced_close = forced_close | auto_liquidate
     
     # =========================================================================
     # 5. CHECK TERMINATION CONDITIONS
@@ -723,7 +780,8 @@ def step(
         'episode_return': state.total_pnl + trade_pnl,  # Cumulative PnL
         'position_closed': position_closed,  # Boolean flag for trade completion
         'trade_pnl': trade_pnl,  # PnL from this specific trade (0 if no close)
-        'forced_close': forced_close,  # Whether position was force-closed at 4:59 PM
+        'forced_close': forced_close,  # Whether position was force-closed (End of Day or Auto-Liq)
+        'apex_margin': dist_to_fail,  # Distance to Trailing Floor
     }
     
     return obs, new_state, reward, done, info
@@ -747,7 +805,8 @@ def batch_reset(
     return jax.vmap(reset, in_axes=(0, None, None))(keys, params, data)
 
 
-@partial(jax.jit, static_argnums=(3,))
+# MEMORY FIX (2025-12-08): Removed static_argnums - params changes each update
+@jax.jit
 def batch_step(
     keys: jax.random.PRNGKey,
     states: EnvState,

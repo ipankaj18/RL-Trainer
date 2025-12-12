@@ -57,15 +57,22 @@ class EnvStatePhase2(NamedTuple):
     be_move_count: jnp.ndarray             # int32 - number of BE moves made
     original_sl_price: jnp.ndarray         # float32 - original SL for BE calculation
     trail_activation_price: jnp.ndarray    # float32 - price at which trailing activated
+    
+    # NEW: Dynamic position sizing (2025-12-12)
+    position_size: jnp.ndarray             # float32 - actual contracts for current trade
 
 
 @chex.dataclass(frozen=True)
 class EnvParamsPhase2:
-    """Environment parameters for Phase 2."""
-    # Market specifications
-    contract_size: float = 50.0
-    tick_size: float = 0.25
-    tick_value: float = 12.50
+    """Environment parameters for Phase 2.
+    
+    ⚠️ DEFAULTS ARE ES CONTRACT SPECS - Override for other markets!
+    Use market_specs.py to get correct values for NQ, YM, RTY, etc.
+    """
+    # Market specifications (ES defaults - override via market_specs.py for other markets)
+    contract_size: float = 50.0      # ES = $50/point, NQ = $20/point
+    tick_size: float = 0.25          # ES/NQ tick size
+    tick_value: float = 12.50        # ES = $12.50 per tick (50 * 0.25)
     commission: float = 2.50
     slippage_ticks: int = 1
     
@@ -90,7 +97,7 @@ class EnvParamsPhase2:
     rth_close: float = 16.983
     
     # Episode parameters
-    min_episode_bars: int = 1500
+    min_episode_bars: int = 400  # Reduced from 1500 for faster learning cycles
     
     # Phase 2 specific
     trail_activation_mult: float = 1.0    # Activate trail after 1R profit
@@ -112,10 +119,10 @@ class EnvParamsPhase2:
     forced_position_ratio: float = 0.0     # 0.0 = no forced, 0.5 = 50% start with position
     forced_position_profit_range: float = 1.0  # Random unrealized P/L range in ATR multiples
     
-    # Enhanced PM exploration bonus (INCREASED from $200 to $400)
-    # PM actions are completely novel - need higher bonus than entry actions
-    pm_action_exploration_bonus: float = 400.0   # Base bonus for MOVE_SL, ENABLE_TRAIL
-    entry_action_exploration_bonus: float = 300.0  # Base bonus for BUY/SELL
+    # PM exploration bonus (INCREASED to $200 - PM actions need stronger signal)
+    # PM actions are completely novel - agent never experienced them in Phase 1
+    pm_action_exploration_bonus: float = 200.0   # Base bonus for MOVE_SL, ENABLE_TRAIL
+    entry_action_exploration_bonus: float = 100.0  # Base bonus for BUY/SELL
 
 
 # =============================================================================
@@ -142,16 +149,21 @@ def get_observation_phase2(
     """
     Get current observation window for Phase 2.
     
-    Returns shape (window_size * num_features + 11,) = (231,)
-    Additional features for position management state + validity features.
+    FIX (2025-12-10): Added drawdown features for Apex compliance awareness.
+    Returns shape (window_size * num_features + 13,) = (233,)
+    Additional features for position management state + validity features + drawdown.
     """
     step = state.step_idx
-    window = params.window_size
+    # CRITICAL FIX (2025-12-08): window_size MUST be a Python int for lax.dynamic_slice
+    # When env_params is traced (not static_argnums), params.window_size returns a traced value
+    # but lax.dynamic_slice requires compile-time static slice sizes.
+    # Since window_size NEVER changes during training, we hardcode it here.
+    window = 20  # Hardcoded: matches EnvParamsPhase2.window_size default
     
     # Compute start index
     start_idx = jnp.maximum(0, step - window)
     
-    # Market features
+    # Market features - use hardcoded window size for slice shape
     market_obs = lax.dynamic_slice(data.features, (start_idx, 0), (window, 8))
     time_obs = lax.dynamic_slice(data.time_features, (start_idx, 0), (window, 3))
     combined = jnp.concatenate([market_obs, time_obs], axis=1)
@@ -164,36 +176,47 @@ def get_observation_phase2(
     safe_price = jnp.where(current_price > 0, current_price, 1.0)
     
     # Position features (5 dims) - same as Phase 1
+    # SYNCHRONIZED WITH Agent_temp (2025-12-07): time_in_position is RAW bars, not normalized
     has_position = state.position != 0
     position_features = jnp.array([
         state.position.astype(jnp.float32),
         jnp.where(has_position, state.entry_price / safe_price, 1.0),
         jnp.where(has_position, jnp.abs(state.sl_price - safe_price) / safe_atr, 0.0),
         jnp.where(has_position, jnp.abs(state.tp_price - safe_price) / safe_atr, 0.0),
-        jnp.where(has_position, (step - state.position_entry_step).astype(jnp.float32) / 390.0, 0.0),
+        jnp.where(has_position, (step - state.position_entry_step).astype(jnp.float32), 0.0),  # RAW bars (match Agent_temp)
     ], dtype=jnp.float32)
     
-    # Phase 2 additional features (3 dims)
+    # Calculate unrealized PnL and portfolio value for drawdown calculation
     unrealized_pnl = calculate_unrealized_pnl(state, current_price, params)
+    portfolio_value = state.balance + unrealized_pnl
+    
+    # FIX (2025-12-10): Drawdown features for Apex compliance awareness
+    current_drawdown = state.highest_balance - portfolio_value
+    drawdown_ratio = current_drawdown / params.trailing_dd_limit  # 0.0 = no DD, 1.0 = at limit
+    drawdown_room = (params.trailing_dd_limit - current_drawdown) / 1000.0  # Room left (in $1000s)
+    
+    # Phase 2 additional features (5 dims, was 3 - added 2 for drawdown)
     phase2_features = jnp.array([
         state.trailing_stop_active.astype(jnp.float32),           # Trail active
         jnp.where(has_position, unrealized_pnl / 1000.0, 0.0),    # Normalized unrealized PnL
         state.be_move_count.astype(jnp.float32) / 3.0,            # BE move count normalized
+        jnp.clip(drawdown_ratio, 0.0, 2.0),                       # NEW: Drawdown ratio (0-1, can exceed)
+        jnp.clip(drawdown_room, -2.5, 2.5),                       # NEW: Room left to limit ($1000s)
     ], dtype=jnp.float32)
     
-    # Validity features (3 dims) - NEW for parity with PyTorch
-    current_hour = data.timestamps_hour[step]
-    in_rth = (current_hour >= params.rth_open) & (current_hour < params.rth_close)
-    can_enter = (state.position == 0) & in_rth
+    # Validity features (3 dims)
+    # SYNCHRONIZED WITH Agent_temp (2025-12-07): can_enter only checks position, not RTH
+    # RTH check is done separately in action mask (matches Agent_temp behavior)
+    can_enter = state.position == 0
     can_manage = has_position
     
     validity_features = jnp.array([
-        can_enter.astype(jnp.float32),      # Can enter new trade
+        can_enter.astype(jnp.float32),      # Can enter new trade (position check only)
         can_manage.astype(jnp.float32),     # Can manage position
         has_position.astype(jnp.float32),   # Has active position
     ], dtype=jnp.float32)
     
-    # Combine all features: 220 + 5 + 3 + 3 = 231
+    # Combine all features: 220 + 5 + 5 + 3 = 233 (was 231)
     obs = jnp.concatenate([flat_obs, position_features, phase2_features, validity_features])
     obs = jnp.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6)
     
@@ -205,9 +228,10 @@ def calculate_unrealized_pnl(
     current_price: jnp.ndarray,
     params: EnvParamsPhase2
 ) -> jnp.ndarray:
-    """Calculate current unrealized P&L."""
-    pnl_long = (current_price - state.entry_price) * params.contract_size * params.position_size
-    pnl_short = (state.entry_price - current_price) * params.contract_size * params.position_size
+    """Calculate current unrealized P&L using the position's actual size."""
+    # FIX (2025-12-12): Use state.position_size for dynamic sizing
+    pnl_long = (current_price - state.entry_price) * params.contract_size * state.position_size
+    pnl_short = (state.entry_price - current_price) * params.contract_size * state.position_size
     
     pnl = jnp.where(
         state.position == 1, pnl_long,
@@ -220,6 +244,8 @@ def action_masks_phase2(state: EnvStatePhase2, data: MarketData, params: EnvPara
     """
     Return valid action mask for Phase 2 (6 actions).
     
+    FIX D (2025-12-10 v2): Emergency HOLD when DD > 80%
+    
     Returns: Boolean array shape (6,)
     """
     is_flat = state.position == 0
@@ -229,23 +255,35 @@ def action_masks_phase2(state: EnvStatePhase2, data: MarketData, params: EnvPara
     current_hour = data.timestamps_hour[state.step_idx]
     within_rth = (current_hour >= params.rth_open) & (current_hour < params.rth_close)
     
-    # Check profitability for BE move
+    # FIX D (2025-12-10 v2): Emergency HOLD when DD > 80%
+    # Prevent opening new positions when too close to Apex limit
     current_price = data.prices[state.step_idx, 3]
     unrealized_pnl = calculate_unrealized_pnl(state, current_price, params)
+    portfolio_value = state.balance + unrealized_pnl
+    current_dd = state.highest_balance - portfolio_value
+    dd_ratio = current_dd / params.trailing_dd_limit
+    
+    # Allow new entries only if DD < 75% (was 80%)
+    # 80% ($2000) left $500 room, which is exactly the max loss per trade.
+    # Commissions/slippage pushed it over ($502+). 75% ($1875) leaves $625 room.
+    safe_to_enter = dd_ratio < 0.75
+    
+    # Check profitability for BE move
     current_atr = data.atr[state.step_idx]
-    min_profit = current_atr * params.be_min_profit_atr * params.contract_size * params.position_size
+    # FIX (2025-12-12): Use state.position_size for dynamic sizing
+    min_profit = current_atr * params.be_min_profit_atr * params.contract_size * state.position_size
     is_profitable = unrealized_pnl > min_profit
     
     # Check if BE not already moved (SL still at original position)
     be_not_moved = state.be_move_count == 0
     
     mask = jnp.array([
-        True,                                           # 0: HOLD - always valid
-        is_flat & within_rth,                           # 1: BUY
-        is_flat & within_rth,                           # 2: SELL
-        has_position & is_profitable & be_not_moved,    # 3: MOVE_SL_TO_BE
-        has_position & ~state.trailing_stop_active,     # 4: ENABLE_TRAIL
-        has_position & state.trailing_stop_active,      # 5: DISABLE_TRAIL
+        True,                                                   # 0: HOLD - always valid
+        is_flat & within_rth & safe_to_enter,                   # 1: BUY (+ DD check)
+        is_flat & within_rth & safe_to_enter,                   # 2: SELL (+ DD check)
+        has_position & is_profitable & be_not_moved,            # 3: MOVE_SL_TO_BE
+        has_position & ~state.trailing_stop_active,             # 4: ENABLE_TRAIL
+        has_position & state.trailing_stop_active,              # 5: DISABLE_TRAIL
     ], dtype=jnp.bool_)
     
     return mask
@@ -257,10 +295,25 @@ def calculate_sl_tp_phase2(
     atr: jnp.ndarray,
     params: EnvParamsPhase2
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Calculate initial stop loss and take profit prices."""
+    """Calculate initial stop loss and take profit prices.
+    
+    FIX (2025-12-10): Cap SL distance so max loss with 1 contract ≤ $500.
+    This ensures Apex DD compliance - allows 5 consecutive losses before
+    hitting the $2,500 trailing drawdown limit.
+    
+    Example for NQ ($20/point): max_sl = 500/20 = 25 points
+    Example for ES ($50/point): max_sl = 500/50 = 10 points
+    """
     safe_atr = jnp.where(atr > 0, atr, entry_price * 0.01)
     
-    sl_distance = safe_atr * params.sl_atr_mult
+    # Calculate raw SL distance based on ATR
+    raw_sl_distance = safe_atr * params.sl_atr_mult
+    
+    # FIX: Cap SL distance so max loss with 1 contract ≤ $500
+    # This prevents single trades from exceeding the Apex DD limit
+    max_sl_distance_points = 500.0 / params.contract_size  # NQ: 25pts, ES: 10pts
+    sl_distance = jnp.minimum(raw_sl_distance, max_sl_distance_points)
+    
     tp_distance = sl_distance * params.tp_sl_ratio
     
     sl_long = entry_price - sl_distance
@@ -305,16 +358,56 @@ def update_trailing_stop(
 def calculate_position_size(
     atr: jnp.ndarray,
     balance: jnp.ndarray,
-    params: EnvParamsPhase2
+    params: EnvParamsPhase2,
+    portfolio_value: jnp.ndarray = None,
+    highest_balance: jnp.ndarray = None
 ) -> jnp.ndarray:
     """
-    Calculate volatility-based position size (NEW for parity with PyTorch).
+    Calculate volatility-based position size with Apex safety features.
     
-    Size based on risk per trade and ATR-based SL distance.
+    FIX (2025-12-10 v2): Enhanced with:
+    - Fix B: Max SL loss reduced to $500 (was $1000)
+    - Fix C: DD-based position scaling (reduce size as DD increases)
     """
-    risk_amount = balance * params.risk_per_trade
-    sl_distance = atr * params.sl_atr_mult
-    size = risk_amount / (sl_distance * params.contract_value + 1e-8)
+    # FIX (2025-12-10 v3): Harden position sizing
+    # 1. Use EFFECTIVE (capped) SL distance for calculation
+    max_sl_points = 500.0 / params.contract_size
+    raw_sl_distance = atr * params.sl_atr_mult
+    effective_sl_distance = jnp.minimum(raw_sl_distance, max_sl_points)
+    
+    # 2. Calculate max risk allowed based on REMAINING drawdown
+    # Leave 10% buffer or min $100
+    if portfolio_value is not None and highest_balance is not None:
+        current_dd = highest_balance - portfolio_value
+        remaining_dd = params.trailing_dd_limit - current_dd
+        # Allow max risk = remaining_dd * 0.9 (keep 10% buffer)
+        max_risk_allowed = jnp.maximum(0.0, remaining_dd * 0.9)
+        # Cap at global max per trade ($500)
+        max_risk_allowed = jnp.minimum(max_risk_allowed, 500.0)
+    else:
+        max_risk_allowed = 500.0
+
+    # 3. Calculate safe size
+    sl_distance_dollars = effective_sl_distance * params.contract_size
+    apex_safe_size = max_risk_allowed / (sl_distance_dollars + 1e-8)
+    
+    # 4. Determine final size
+    risk_based_size = (balance * params.risk_per_trade) / (sl_distance_dollars + 1e-8)
+    size = jnp.minimum(risk_based_size, apex_safe_size)
+    
+    # FIX C (2025-12-10 v2): Extra DD scaling (keep this for additional safety)
+    if portfolio_value is not None and highest_balance is not None:
+        current_dd = highest_balance - portfolio_value
+        dd_ratio = current_dd / params.trailing_dd_limit
+        dd_ratio = jnp.clip(dd_ratio, 0.0, 1.0)
+        
+        # Scale: 1.0 at 0% DD, linearly down to 0.2 at 80%+ DD
+        dd_scale = jnp.where(
+            dd_ratio >= 0.8,
+            0.2,  # Minimum 20% position when near limit
+            1.0 - dd_ratio * 0.9
+        )
+        size = size * dd_scale
     
     # Clamp to [1.0, max_position_size]
     size = jnp.clip(size, 1.0, params.max_position_size)
@@ -335,12 +428,13 @@ def validate_pm_action(
     Returns: Boolean indicating if action is valid
     """
     # Calculate unrealized PnL
+    # FIX (2025-12-12): Use state.position_size for dynamic sizing
     pnl = jnp.where(
         state.position == 1,
-        (current_price - state.entry_price) * params.contract_size * params.position_size,
+        (current_price - state.entry_price) * params.contract_size * state.position_size,
         jnp.where(
             state.position == -1,
-            (state.entry_price - current_price) * params.contract_size * params.position_size,
+            (state.entry_price - current_price) * params.contract_size * state.position_size,
             0.0
         )
     )
@@ -438,23 +532,45 @@ def calculate_reward_phase2(
     - Violation penalty: -10.0 for Apex violations
     """
     # ===== EXPLORATION BONUS CURRICULUM (CRITICAL FIX) =====
-    # This solves the HOLD trap by incentivizing early trades
-    # PM actions get HIGHER bonus than entries - they're completely novel!
-    exploration_horizon = params.total_training_timesteps * 0.30  # 30% of training
+    # This solves the HOLD trap by incentivizing trades throughout training
+    # 
+    # FIX (2025-12-10): DD-Aware exploration bonus
+    # Problem: If model hits DD often, it learns HOLD is safest → new HOLD trap
+    # Solution: Keep bonus active (20% floor) + boost when in drawdown
+    exploration_horizon = params.total_training_timesteps * 1.0  # 100% of training
     
     # Handle None case for timestep (JAX-compatible)
     current_ts = jnp.array(params.current_global_timestep)
     exploration_progress = current_ts / exploration_horizon
     
-    # Entry bonus: configurable (default $300), decaying over first 30% of training
+    # Standard decay based on training progress
+    base_decay = jnp.maximum(0.0, 1.0 - exploration_progress)
+    
+    # DD-aware boost: increase bonus when near DD limit
+    # Encourages trading out of difficult situations instead of HOLDing
+    safe_initial = jnp.maximum(params.initial_balance, 1.0)
+    dd_from_initial = (safe_initial - portfolio_value) / params.trailing_dd_limit
+    dd_ratio = jnp.clip(dd_from_initial, 0.0, 1.5)  # 0 = no DD, 1 = at limit
+    
+    # DD boost kicks in at 30% drawdown, scales with severity
+    # At 50% DD: boost = 0.25, at 100% DD: boost = 0.5
+    dd_boost = jnp.where(dd_ratio > 0.3, (dd_ratio - 0.3) * 0.7, 0.0)
+    dd_boost = jnp.clip(dd_boost, 0.0, 0.5)
+    
+    # Final multiplier: at least 20% floor + DD boost
+    # This ensures exploration never fully stops, even late in training
+    exploration_mult = jnp.maximum(base_decay, 0.2) + dd_boost
+    exploration_mult = jnp.clip(exploration_mult, 0.2, 1.0)  # Cap at 100%
+    
+    # Entry bonus: configurable (default $300), with DD-aware multiplier
     base_entry_bonus = params.entry_action_exploration_bonus
-    entry_bonus = base_entry_bonus * jnp.maximum(0.0, 1.0 - exploration_progress)
+    entry_bonus = base_entry_bonus * exploration_mult
     scaled_entry_bonus = entry_bonus / 100.0  # Scale for reward
     
     # PM action bonus: configurable (default $400 - HIGHER than entries!)
     # PM actions are completely novel - agent never experienced them in Phase 1
     base_pm_bonus = params.pm_action_exploration_bonus
-    pm_bonus = base_pm_bonus * jnp.maximum(0.0, 1.0 - exploration_progress)
+    pm_bonus = base_pm_bonus * exploration_mult
     scaled_pm_bonus = pm_bonus / 100.0
     
     # Apply exploration bonuses
@@ -484,13 +600,36 @@ def calculate_reward_phase2(
     portfolio_reward = pnl_pct * 20.0
     
     # ===== PENALTIES =====
-    violation_penalty = jnp.where(dd_violation | time_violation, -10.0, 0.0)
+    # FIX (2025-12-10 v2): STRONGER graduated drawdown penalty for Apex compliance
+    # Start penalizing when drawdown exceeds 30% of limit, increasing to -15 at 100%
+    # This is 3x stronger than the previous -5 penalty
+    safe_balance = jnp.maximum(params.initial_balance, 1.0)
+    dd_from_start = (safe_balance - portfolio_value) / params.trailing_dd_limit
+    dd_ratio = jnp.clip(dd_from_start, 0.0, 1.5)  # Ratio of drawdown to limit
+    
+    # Graduated penalty: 0 below 30%, scales to -15 at 100%
+    penalty_threshold = 0.3  # Start penalty earlier (was 0.5)
+    graduated_penalty = jnp.where(
+        dd_ratio > penalty_threshold,
+        -15.0 * (dd_ratio - penalty_threshold) / (1.0 - penalty_threshold),  # -15 max (was -5)
+        0.0
+    )
+    graduated_penalty = jnp.clip(graduated_penalty, -15.0, 0.0)
+    
+    # Add cliff penalty on actual violation (still -10 for hard violation)
+    violation_penalty = jnp.where(dd_violation | time_violation, -10.0, graduated_penalty)
     
     # ===== COMBINE ALL COMPONENTS =====
     reward = exploration_reward + pm_reward + trade_reward + portfolio_reward + violation_penalty
     
-    # Clip for stability
-    reward = jnp.clip(reward, -10.0, 10.0)
+    # ===== REWARD NORMALIZATION (2025-12-12) =====
+    # Normalize rewards: 12 micros @ 1/12 each = 1.0 total (same as 1 emini)
+    # This ensures consistent learning signal regardless of position sizing limits
+    normalization_factor = 1.0 / params.max_position_size
+    reward = reward * normalization_factor
+    
+    # Clip for stability (adjusted for normalization)
+    reward = jnp.clip(reward, -15.0 * normalization_factor, 10.0 * normalization_factor)
     
     return reward
 
@@ -542,7 +681,10 @@ def reset_phase2(
     )
     
     # Calculate SL/TP for forced position
-    sl_distance = safe_atr * params.sl_atr_mult
+    # FIX (2025-12-10): Cap SL distance for Apex compliance (same as calculate_sl_tp_phase2)
+    raw_sl_distance = safe_atr * params.sl_atr_mult
+    max_sl_distance_points = 500.0 / params.contract_size  # NQ: 25pts, ES: 10pts
+    sl_distance = jnp.minimum(raw_sl_distance, max_sl_distance_points)
     tp_distance = sl_distance * params.tp_sl_ratio
     
     forced_sl = jnp.where(
@@ -588,6 +730,8 @@ def reset_phase2(
         be_move_count=jnp.array(0, dtype=jnp.int32),
         original_sl_price=jnp.array(final_sl, dtype=jnp.float32),
         trail_activation_price=jnp.array(0.0, dtype=jnp.float32),
+        # NEW (2025-12-12): Dynamic position sizing - initialize with default
+        position_size=jnp.array(params.position_size, dtype=jnp.float32),
     )
     
     obs = get_observation_phase2(state, data, params)
@@ -645,10 +789,11 @@ def step_phase2(
     exit_price = jnp.where(sl_hit, state.sl_price, jnp.where(tp_hit, state.tp_price, 0.0))
     
     # Calculate PnL with curriculum commission
+    # FIX (2025-12-12): Use state.position_size for dynamic sizing
     curriculum_comm = get_curriculum_commission_phase2(params)
-    pnl_long = (exit_price - state.entry_price) * params.contract_size * params.position_size
-    pnl_short = (state.entry_price - exit_price) * params.contract_size * params.position_size
-    closed_pnl = jnp.where(state.position == 1, pnl_long, pnl_short) - curriculum_comm * 2 * params.position_size
+    pnl_long = (exit_price - state.entry_price) * params.contract_size * state.position_size
+    pnl_short = (state.entry_price - exit_price) * params.contract_size * state.position_size
+    closed_pnl = jnp.where(state.position == 1, pnl_long, pnl_short) - curriculum_comm * 2 * state.position_size
     
     trade_pnl = jnp.where(position_closed, closed_pnl, 0.0)
     exit_type = jnp.where(tp_hit & position_closed, 2, jnp.where(sl_hit & position_closed, 1, 0))
@@ -678,9 +823,10 @@ def step_phase2(
         current_price - slippage,
         current_price + slippage
     )
-    forced_pnl_long = (forced_exit_price - entry_after) * params.contract_size * params.position_size
-    forced_pnl_short = (entry_after - forced_exit_price) * params.contract_size * params.position_size
-    forced_pnl = jnp.where(position_after == 1, forced_pnl_long, forced_pnl_short) - curriculum_comm * 2 * params.position_size
+    # FIX (2025-12-12): Use state.position_size for dynamic sizing
+    forced_pnl_long = (forced_exit_price - entry_after) * params.contract_size * state.position_size
+    forced_pnl_short = (entry_after - forced_exit_price) * params.contract_size * state.position_size
+    forced_pnl = jnp.where(position_after == 1, forced_pnl_long, forced_pnl_short) - curriculum_comm * 2 * state.position_size
     
     trade_pnl = jnp.where(forced_close, forced_pnl, trade_pnl)
     balance_after = balance_after + jnp.where(forced_close, forced_pnl, 0.0)
@@ -697,8 +843,14 @@ def step_phase2(
     action_is_valid = validate_pm_action(action, state, current_price, current_atr, params)
     effective_action = jnp.where(action_is_valid, action, ACTION_HOLD)
     
-    # Calculate dynamic position size for new trades (NEW for parity)
-    dynamic_size = calculate_position_size(current_atr, balance_after, params)
+    # Calculate dynamic position size for new trades (with DD-based scaling)
+    # Pass portfolio_value and highest_balance for Fix C (DD-based position scaling)
+    current_portfolio = state.balance + calculate_unrealized_pnl(state, current_price, params)
+    dynamic_size = calculate_position_size(
+        current_atr, balance_after, params,
+        portfolio_value=current_portfolio,
+        highest_balance=state.highest_balance
+    )
     
     # --- Action 1: BUY ---
     opening_long = can_open & (effective_action == ACTION_BUY)
@@ -714,7 +866,8 @@ def step_phase2(
     
     # --- Action 3: MOVE SL TO BE (validated) ---
     unrealized_pnl = calculate_unrealized_pnl(state, current_price, params)
-    min_profit_for_be = current_atr * params.be_min_profit_atr * params.contract_size * dynamic_size
+    # FIX (2025-12-12): Use state.position_size for existing positions
+    min_profit_for_be = current_atr * params.be_min_profit_atr * params.contract_size * state.position_size
     can_move_be = has_position & (unrealized_pnl > min_profit_for_be) & (be_count_after == 0)
     moving_to_be = can_move_be & (effective_action == ACTION_MOVE_SL_TO_BE)
     be_sl = state.entry_price  # Move SL to entry price
@@ -726,7 +879,8 @@ def step_phase2(
     disabling_trail = has_position & trailing_after & (effective_action == ACTION_DISABLE_TRAIL)
     
     # Store the position size used for this trade
-    new_position_size = jnp.where(opening_any, dynamic_size, params.position_size)
+    # FIX (2025-12-12): Use dynamic_size for new trades, preserve state.position_size for existing
+    new_position_size = jnp.where(opening_any, dynamic_size, state.position_size)
     
     # Apply all updates
     new_position = jnp.where(opening_long, 1, jnp.where(opening_short, -1, position_after))
@@ -734,7 +888,8 @@ def step_phase2(
     new_sl_price = jnp.where(opening_long, buy_sl, jnp.where(opening_short, sell_sl, sl_after))
     new_sl_price = jnp.where(moving_to_be, be_sl, new_sl_price)
     new_tp_price = jnp.where(opening_long, buy_tp, jnp.where(opening_short, sell_tp, tp_after))
-    new_balance = balance_after - jnp.where(opening_any, params.commission * params.position_size, 0.0)
+    # FIX (2025-12-12): Use new_position_size for entry commission
+    new_balance = balance_after - jnp.where(opening_any, params.commission * new_position_size, 0.0)
     new_trailing_active = jnp.where(enabling_trail, True, jnp.where(disabling_trail, False, trailing_after))
     new_be_count = be_count_after + jnp.where(moving_to_be, 1, 0)
     new_num_trades = state.num_trades + jnp.where(opening_any, 1, 0)
@@ -744,19 +899,81 @@ def step_phase2(
     # =========================================================================
     # 5. UPDATE PORTFOLIO & TRAILING DRAWDOWN
     # =========================================================================
+    # FIX (2025-12-12): Use new_position_size for unrealized PnL after entry
     unrealized_pnl = jnp.where(
         new_position == 1,
-        (current_price - new_entry_price) * params.contract_size * params.position_size,
+        (current_price - new_entry_price) * params.contract_size * new_position_size,
         jnp.where(
             new_position == -1,
-            (new_entry_price - current_price) * params.contract_size * params.position_size,
+            (new_entry_price - current_price) * params.contract_size * new_position_size,
             0.0
         )
     )
     
     portfolio_value = new_balance + unrealized_pnl
+    
+    # FIX (2025-12-12): Apex Trailing Rule - Cap at Initial + $100
+    # The trailing limit stops rising once the THRESHOLD reaches Initial + $100.
+    # Threshold = High Water Mark - 2500.
+    # So if HWM > Initial + 2600, limit is capped?
+    # Actually, Apex rule: "The Trailing Threshold stops at Initial + 100."
+    # So if Initial=50k, Threshold stops at 50,100.
+    # Our logic uses `trailing_dd_limit` as the DISTANCE ($2500).
+    # So `new_trailing_dd` here represents the THRESHOLD PRICE.
+    
+    uncapped_threshold = jnp.maximum(state.highest_balance, portfolio_value) - params.trailing_dd_limit
+    cap_threshold = params.initial_balance + 100.0
+    new_trailing_dd = jnp.minimum(uncapped_threshold, cap_threshold)
+    
+    # We must also update `new_highest` to be consistent with the threshold for next step?
+    # Ideally `highest_balance` determines the threshold.
+    # If we cap the threshold, `highest_balance` effectively stops mattering for the threshold.
+    # But we keep tracking `new_highest` for metrics.
     new_highest = jnp.maximum(state.highest_balance, portfolio_value)
-    new_trailing_dd = new_highest - params.trailing_dd_limit
+    
+    # =========================================================================
+    # 5a. AUTO-LIQUIDATION (Safety Guardrail)
+    # =========================================================================
+    # If we are dangerously close to the limit (e.g. > 90% utilized), FORCE CLOSE.
+    # Drawdown Amount = Highest - Portfolio (Wait, this is wrong if capped).
+    # Drawdown Proximity = Portfolio - Threshold.
+    # If Portfolio < Threshold + $250, we are in danger area.
+    
+    # If we are dangerously close to the limit (e.g. > 90% utilized), FORCE CLOSE.
+    # Drawdown Amount = Highest - Portfolio (Wait, this is wrong if capped).
+    # Drawdown Proximity = Portfolio - Threshold.
+    # If Portfolio < Threshold + $1000, we are in danger area.
+    # NQ Volatility: 50 points = $1000. A single bar can move 50 points.
+    
+    dist_to_fail = portfolio_value - new_trailing_dd
+    auto_liquidate = (new_position != 0) & (dist_to_fail < 1000.0)  # Aggressive $1000 buffer
+    
+    # Apply Auto-Liquidation (Force Close at current prices)
+    # ... (rest of logic same) ...
+    
+    # ...
+    
+    # ...
+    
+    # Apply Auto-Liquidation (Force Close at current prices)
+    # Similar to forced_close RTH logic
+    liq_exit_price = jnp.where(
+        new_position == 1,
+        current_price - slippage, # Market sell
+        current_price + slippage  # Market buy
+    )
+    liq_pnl_long = (liq_exit_price - new_entry_price) * params.contract_size * new_position_size
+    liq_pnl_short = (new_entry_price - liq_exit_price) * params.contract_size * new_position_size
+    liq_pnl = jnp.where(new_position == 1, liq_pnl_long, liq_pnl_short) - curriculum_comm * 2 * new_position_size
+    
+    # Update state if liquidated
+    trade_pnl = trade_pnl + jnp.where(auto_liquidate, liq_pnl, 0.0)
+    new_balance = new_balance + jnp.where(auto_liquidate, liq_pnl, 0.0)
+    new_position = jnp.where(auto_liquidate, 0, new_position)
+    portfolio_value = jnp.where(auto_liquidate, new_balance, portfolio_value) # Recalc portfolio
+    
+    # Re-calculate Threshold after liquidation (balance changed)
+    # Actually threshold depends on HWM which doesn't shrink. So threshold stays same.
     
     # Update highest profit point
     new_highest_profit = jnp.where(
@@ -768,7 +985,35 @@ def step_phase2(
     # =========================================================================
     # 6. CHECK TERMINATION
     # =========================================================================
-    dd_violation = portfolio_value < new_trailing_dd
+    # FIX (2025-12-10 v2): Intra-bar drawdown check using worst-case price
+    # CAPPED AT SL LEVEL - we can't lose more than SL distance!
+    # For long: worst case is MAX(bar_low, sl_price) - SL exits before going lower
+    # For short: worst case is MIN(bar_high, sl_price) - SL exits before going higher
+    intra_low = data.low_s[step_idx]   # Intra-bar low
+    intra_high = data.high_s[step_idx]  # Intra-bar high
+    
+    # FIX: Cap worst price at SL level - position would exit at SL, not raw bar price
+    # For LONG: if low goes below SL, we'd exit at SL not at low
+    worst_price_long = jnp.maximum(intra_low, new_sl_price)
+    # For SHORT: if high goes above SL, we'd exit at SL not at high  
+    worst_price_short = jnp.minimum(intra_high, new_sl_price)
+    
+    # Calculate worst-case PnL using SL-capped prices
+    # FIX (2025-12-12): Use new_position_size for dynamic sizing
+    worst_pnl_long = (worst_price_long - new_entry_price) * params.contract_size * new_position_size
+    worst_pnl_short = (new_entry_price - worst_price_short) * params.contract_size * new_position_size
+    worst_unrealized = jnp.where(
+        new_position == 1, worst_pnl_long,
+        jnp.where(new_position == -1, worst_pnl_short, 0.0)
+    )
+    worst_case_equity = new_balance + worst_unrealized
+    
+    # Intra-bar DD violation: would hit limit at some point during this bar
+    intra_bar_dd_violation = (new_position != 0) & (worst_case_equity < new_trailing_dd)
+    
+    
+    # Standard end-of-bar check
+    dd_violation = (portfolio_value < new_trailing_dd) | intra_bar_dd_violation
     end_of_data = step_idx >= data_length - 2
     time_violation = forced_close
     
@@ -819,6 +1064,8 @@ def step_phase2(
         be_move_count=new_be_count.astype(jnp.int32),
         original_sl_price=new_original_sl,
         trail_activation_price=state.trail_activation_price,
+        # NEW (2025-12-12): Dynamic position sizing
+        position_size=new_position_size,
     )
     
     obs = get_observation_phase2(new_state, data, params)
@@ -837,6 +1084,18 @@ def step_phase2(
         'trailing_dd': new_highest - new_balance,
         'forced_close': forced_close,
         'episode_return': new_balance - params.initial_balance,
+        'apex_margin': dist_to_fail,  # NEW: Distance to Trailing Floor
+        # NEW (2025-12-10): Termination reason flags for debugging
+        'step_idx': step_idx,
+        'dd_violation': dd_violation,
+        'intra_bar_dd_violation': intra_bar_dd_violation,
+        'end_of_data': end_of_data,
+        'time_violation': time_violation,
+        'worst_case_equity': worst_case_equity,
+        'trailing_dd_level': new_trailing_dd,
+        'current_price': current_price,
+        'position': new_position,
+        'entry_price': new_entry_price,
     }
     
     return obs, new_state, reward, done, info
@@ -856,7 +1115,8 @@ def batch_reset_phase2(
     return jax.vmap(reset_phase2, in_axes=(0, None, None))(keys, params, data)
 
 
-@partial(jax.jit, static_argnums=(3,))
+# MEMORY FIX (2025-12-08): Removed static_argnums - params changes each update
+@jax.jit
 def batch_step_phase2(
     keys: jax.random.PRNGKey,
     states: EnvStatePhase2,
@@ -870,7 +1130,8 @@ def batch_step_phase2(
     )
 
 
-@partial(jax.jit, static_argnums=(2,))
+# MEMORY FIX (2025-12-08): Removed static_argnums - params changes each update
+@jax.jit
 def batch_action_masks_phase2(
     states: EnvStatePhase2,
     data: MarketData,

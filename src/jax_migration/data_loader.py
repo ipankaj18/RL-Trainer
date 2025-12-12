@@ -32,10 +32,13 @@ def precompute_time_features(timestamps: pd.DatetimeIndex) -> np.ndarray:
     """
     Pre-compute all time-related features as numpy arrays.
     
+    SYNCHRONIZED WITH Agent_temp/observation_builder.py (2025-12-07)
+    Uses SAME calculation as real-time NinjaTrader bridge for training parity.
+    
     Returns shape (num_timesteps, 3):
-        - hour_decimal: normalized hour (0-1 scale)
-        - min_from_open: minutes since 9:30 AM (normalized)
-        - min_to_close: minutes until 4:59 PM (normalized)
+        - hour_norm: hour / 24.0 (matches Agent_temp)
+        - min_from_open: RAW minutes since 9:30 AM (0 to ~449)
+        - min_to_close: RAW minutes until 4:59 PM (0 to ~449)
     """
     # Convert to Eastern Time if needed
     if timestamps.tz is None:
@@ -43,21 +46,22 @@ def precompute_time_features(timestamps: pd.DatetimeIndex) -> np.ndarray:
     else:
         timestamps = timestamps.tz_convert('America/New_York')
     
-    hours = timestamps.hour + timestamps.minute / 60.0
+    # Hour normalized to 0-1 (matches Agent_temp: hour / 24.0)
+    # Agent_temp uses: hour_norm = hour / 24.0
+    hour_norm = timestamps.hour / 24.0
     
-    # Normalized hour (9.5 to 16.98 -> 0 to 1)
-    hour_decimal = (hours - 9.5) / (16.98 - 9.5)
-    hour_decimal = np.clip(hour_decimal, 0, 1)
+    # RAW minutes from open (9:30 AM) - matches Agent_temp
+    # Agent_temp uses: min_from_open = current_minutes - open_minutes
+    open_minutes = 9 * 60 + 30  # 9:30 AM = 570 minutes from midnight
+    current_minutes = timestamps.hour * 60 + timestamps.minute
+    min_from_open = (current_minutes - open_minutes).astype(np.float32)
     
-    # Minutes from open (9:30 AM)
-    min_from_open = (hours - 9.5) * 60
-    min_from_open = np.clip(min_from_open, 0, 449) / 449.0
+    # RAW minutes to close (4:59 PM) - matches Agent_temp
+    # Agent_temp uses: min_to_close = close_minutes - current_minutes
+    close_minutes = 16 * 60 + 59  # 4:59 PM = 1019 minutes from midnight
+    min_to_close = (close_minutes - current_minutes).astype(np.float32)
     
-    # Minutes to close (4:59 PM = 16.983)
-    min_to_close = (16.983 - hours) * 60
-    min_to_close = np.clip(min_to_close, 0, 449) / 449.0
-    
-    return np.stack([hour_decimal, min_from_open, min_to_close], axis=1).astype(np.float32)
+    return np.stack([hour_norm, min_from_open, min_to_close], axis=1).astype(np.float32)
 
 
 def compute_trading_mask(timestamps: pd.DatetimeIndex) -> np.ndarray:
@@ -84,6 +88,9 @@ def precompute_rth_indices(timestamps: pd.DatetimeIndex, window_size: int = 60) 
     
     RTH hours: 9:30 AM - 4:00 PM ET (allow entries until 4:00 PM)
     
+    FIX (2025-12-10): Increased minimum remaining bars from 100 to 400
+    to prevent episodes terminating early due to end of data.
+    
     Args:
         timestamps: DatetimeIndex of all bars
         window_size: Minimum lookback window needed
@@ -97,7 +104,10 @@ def precompute_rth_indices(timestamps: pd.DatetimeIndex, window_size: int = 60) 
         timestamps = timestamps.tz_convert('America/New_York')
     
     rth_indices = []
-    max_start = len(timestamps) - 100  # Need at least 100 bars for min episode
+    # FIX (2025-12-10): Need at least 400 bars for proper episode length
+    # This prevents "End of data" termination after only a few steps
+    min_remaining_bars = 400
+    max_start = len(timestamps) - min_remaining_bars
     
     for idx in range(window_size, max_start):
         ts = timestamps[idx]

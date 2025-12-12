@@ -142,28 +142,73 @@ def get_safe_env_limits() -> Tuple[int, List[int]]:
         print(f"Process limit: unlimited (cloud platform detected)")
         print(f"CPU Cores: {cpu_count}")
         
-        # Smart Hardware Tier Detection
+        # NEW: VRAM-based adaptive scaling (2025-12-08)
+        # Detect GPU VRAM to better scale environments
+        gpu_vram_gb = 0.0
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gpu_vram_gb = mem_info.total / (1024**3)
+            pynvml.nvmlShutdown()
+            print(f"GPU VRAM: {gpu_vram_gb:.1f} GB")
+        except Exception as e:
+            print(f"[WARN] Could not detect GPU VRAM: {e}")
+            gpu_vram_gb = 8.0  # Conservative default
+        
+        # Combined tier detection: use MINIMUM of CPU-based and VRAM-based limits
+        # VRAM scaling: ~0.5 GB per 1024 envs (conservative estimate)
+        vram_max_envs = int(gpu_vram_gb / 0.5) * 1024
+        
+        # CPU-based tier
         if cpu_count > 32:
-            # High-End (e.g., H100/A100 instances, Threadripper)
-            print(f"Hardware Tier: HIGH-PERFORMANCE (Aggressive Scaling)")
-            print(f"Safe max envs: 16384")
-            print(f"Search space: [1024, 2048, 4096, 8192, 16384]")
-            return (16384, [1024, 2048, 4096, 8192, 16384])
-            
+            cpu_tier = "HIGH"
+            cpu_max_envs = 16384
         elif cpu_count >= 16:
-            # Mid-Range (e.g., Standard Cloud Instances, Desktop)
-            print(f"Hardware Tier: MID-RANGE (Standard Scaling)")
-            print(f"Safe max envs: 4096")
-            print(f"Search space: [512, 1024, 2048, 4096]")
-            return (4096, [512, 1024, 2048, 4096])
-            
+            cpu_tier = "MID"
+            cpu_max_envs = 4096
         else:
-            # Low-End (e.g., Laptops, Small Instances)
-            print(f"Hardware Tier: CONSUMER/ENTRY (Conservative Scaling)")
-            print(f"Safe max envs: 512")
-            print(f"Search space: [128, 256, 512]")
-            print(f"Note: Limited by CPU core count ({cpu_count}) to prevent system freeze")
-            return (512, [128, 256, 512])
+            cpu_tier = "LOW"
+            cpu_max_envs = 512
+        
+        # VRAM-based tier  
+        if gpu_vram_gb >= 24:  # A100, RTX 4090, H100
+            vram_tier = "HIGH"
+            vram_max_envs = 16384
+        elif gpu_vram_gb >= 12:  # RTX 4080, RTX 3090, V100
+            vram_tier = "MID"
+            vram_max_envs = 8192
+        elif gpu_vram_gb >= 8:  # RTX 4070, RTX 3070
+            vram_tier = "ENTRY"
+            vram_max_envs = 2048
+        else:  # <8GB
+            vram_tier = "LOW"
+            vram_max_envs = 512
+        
+        # Use the more conservative limit (min of CPU and VRAM)
+        effective_max = min(cpu_max_envs, vram_max_envs)
+        
+        print(f"CPU Tier: {cpu_tier} (max {cpu_max_envs} envs)")
+        print(f"VRAM Tier: {vram_tier} (max {vram_max_envs} envs)")
+        print(f"Effective Max: {effective_max} envs (using more conservative limit)")
+        
+        # Build search space based on effective max
+        if effective_max >= 16384:
+            env_array = [1024, 2048, 4096, 8192, 16384]
+        elif effective_max >= 8192:
+            env_array = [512, 1024, 2048, 4096, 8192]
+        elif effective_max >= 4096:
+            env_array = [512, 1024, 2048, 4096]
+        elif effective_max >= 2048:
+            env_array = [256, 512, 1024, 2048]
+        elif effective_max >= 512:
+            env_array = [128, 256, 512]
+        else:
+            env_array = [64, 128, 256]
+        
+        print(f"Search space: {env_array}")
+        return (effective_max, env_array)
     
     # Calculate safe max based on actual limit
     # Rule of thumb: ~25 threads per env, use 75% of limit for safety
@@ -635,7 +680,7 @@ def run_combo(
             oom_penalty - divergence_penalty - memory_penalty
         )
 
-        return {
+        result = {
             # Config
             "num_envs": num_envs,
             "num_steps": num_steps,
@@ -663,6 +708,12 @@ def run_combo(
             "status": status,
             "quality_acceptable": quality_acceptable
         }
+        
+        # MEMORY SAFETY (2025-12-08): Clear JIT caches after each run
+        # Prevents memory accumulation across multiple stress test combos
+        jax.clear_caches()
+        
+        return result
 
     except Exception as e:
         gpu_monitor.stop_monitoring()
@@ -680,6 +731,9 @@ def run_combo(
         else:
             status = "error"
 
+        # MEMORY SAFETY: Clear caches even after error
+        jax.clear_caches()
+        
         return {
             "num_envs": num_envs,
             "num_steps": num_steps,

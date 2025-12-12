@@ -1,0 +1,97 @@
+
+============================================================
+2025-12-12T16:53:36.957577 - Simple JAX Stress Test
+Command: /usr/bin/python /workspace/scripts/stress_test_simple.py --num-updates 200 --max-runs 3
+Return Code: 0
+Output:
+/workspace/scripts/stress_test_simple.py:58: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml
+W1212 16:53:27.707687    1343 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 16:53:27.710683    1277 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+============================================================
+JAX STRESS TEST - SIMPLE SELF-CONTAINED VERSION
+============================================================
+🖥️  JAX Devices: [CudaDevice(id=0)]
+🎮 GPU: RTX4000AdaGeneration
+[AUTO-CONFIG] Process limit set to 8192 for stress testing
+📊 Max Safe Envs: 245
+📊 Test Options: [128, 192, 256]
+============================================================
+Testing: num_envs=128, num_steps=128, updates=200
+============================================================
+✓ Initialized 128 environments
+⏳ Warming up (5 updates)...
+✓ Warmup complete
+🚀 Running 200 updates...
+  Update 0/200 | GPU: 5.0%
+  Update 20/200 | GPU: 5.0%
+  Update 40/200 | GPU: 5.0%
+  Update 60/200 | GPU: 5.0%
+  Update 80/200 | GPU: 5.0%
+  Update 100/200 | GPU: 81.0%
+  Update 120/200 | GPU: 81.0%
+  Update 140/200 | GPU: 81.0%
+  Update 160/200 | GPU: 81.0%
+  Update 180/200 | GPU: 81.0%
+✅ SUCCESS
+   Steps/Second: 7,948,822
+   GPU Utilization: 43.0%
+   Memory: 15.3 / 20.0 GB
+   Temperature: 29°C
+============================================================
+Testing: num_envs=192, num_steps=128, updates=200
+============================================================
+✓ Initialized 192 environments
+⏳ Warming up (5 updates)...
+✓ Warmup complete
+🚀 Running 200 updates...
+  Update 0/200 | GPU: 0.0%
+  Update 20/200 | GPU: 0.0%
+  Update 40/200 | GPU: 0.0%
+  Update 60/200 | GPU: 53.0%
+  Update 80/200 | GPU: 53.0%
+  Update 100/200 | GPU: 53.0%
+  Update 120/200 | GPU: 53.0%
+  Update 140/200 | GPU: 53.0%
+  Update 160/200 | GPU: 79.0%
+  Update 180/200 | GPU: 79.0%
+✅ SUCCESS
+   Steps/Second: 11,898,398
+   GPU Utilization: 42.3%
+   Memory: 15.3 / 20.0 GB
+   Temperature: 30°C
+============================================================
+Testing: num_envs=256, num_steps=128, updates=200
+============================================================
+✓ Initialized 256 environments
+⏳ Warming up (5 updates)...
+✓ Warmup complete
+🚀 Running 200 updates...
+  Update 0/200 | GPU: 0.0%
+  Update 20/200 | GPU: 0.0%
+  Update 40/200 | GPU: 0.0%
+  Update 60/200 | GPU: 40.0%
+  Update 80/200 | GPU: 40.0%
+  Update 100/200 | GPU: 40.0%
+  Update 120/200 | GPU: 40.0%
+  Update 140/200 | GPU: 83.0%
+  Update 160/200 | GPU: 83.0%
+  Update 180/200 | GPU: 83.0%
+✅ SUCCESS
+   Steps/Second: 15,825,958
+   GPU Utilization: 42.9%
+   Memory: 15.3 / 20.0 GB
+   Temperature: 31°C
+============================================================
+GENERATING HARDWARE PROFILES
+============================================================
+📁 Saved profile: /workspace/config/hardware_profiles/RTX4000AdaGeneration_balanced.yaml
+📁 Saved profile: /workspace/config/hardware_profiles/RTX4000AdaGeneration_max_gpu.yaml
+📁 Saved profile: /workspace/config/hardware_profiles/RTX4000AdaGeneration_max_sps.yaml
+============================================================
+STRESS TEST COMPLETE
+============================================================
+✓ Successful configs: 3/3
+✓ Best balanced: num_envs=256, GPU=42.9%
+✓ Max GPU config: num_envs=128, GPU=43.0%
+✓ Max SPS config: num_envs=256, SPS=15,825,958

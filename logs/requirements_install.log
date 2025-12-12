@@ -1,0 +1,14 @@
+
+============================================================
+2025-12-12T16:52:29.098597 - Installing requirements from requirements.txt
+Command: /usr/bin/python -m pip install -r /workspace/requirements.txt
+Return Code: 0
+Output:
+[Interactive mode - output not captured]
+
+============================================================
+2025-12-12T16:53:04.024729 - Installing requirements from requirements-jax.txt
+Command: /usr/bin/python -m pip install -r /workspace/requirements-jax.txt
+Return Code: 0
+Output:
+[Interactive mode - output not captured]

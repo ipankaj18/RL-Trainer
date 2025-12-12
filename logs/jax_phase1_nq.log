@@ -1,0 +1,940 @@
+
+============================================================
+2025-12-12T18:24:54.218891 - JAX Phase 1 Training (NQ, 256 envs, 20,000,000 steps)
+Command: /usr/bin/python -m src.jax_migration.train_ppo_jax_fixed --market NQ --num_envs 256 --total_timesteps 20000000 --data_path /workspace/data/NQ_D1M_train.csv
+Return Code: 0
+Output:
+<frozen runpy>:128: RuntimeWarning: 'src.jax_migration.train_ppo_jax_fixed' found in sys.modules after import of package 'src.jax_migration', but prior to execution of 'src.jax_migration.train_ppo_jax_fixed'; this may result in unpredictable behaviour
+W1212 18:22:38.548911   16066 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W1212 18:22:38.551928   15679 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+[CONFIG] Auto-updated checkpoint dir to: models/phase1_jax_nq
+Checkpoint directory: /workspace/models/phase1_jax_nq
+JAX PPO Training Script - FIXED VERSION
+JAX devices: [CudaDevice(id=0)]
+Market: NQ
+Data path: /workspace/data/NQ_D1M_train.csv
+Loading minute data from /workspace/data/NQ_D1M_train.csv...
+Loading second-level data from /workspace/data/NQ_D1M_train.csv...
+  Second-level data integrated successfully.
+  RTH indices computed: 81315 valid start points
+Using NQ contract specs: $20.0/point
+Metrics tracker initialized: /workspace/models/phase1_jax_nq/training_metrics_NQ.json
+Adaptive training system initialized (auto-apply enabled)
+Starting training:
+  Total timesteps: 20,000,000
+  Num envs: 256
+  Steps per rollout: 128
+  Num updates: 610
+  Observation shape: (225,)
+Update 10/610
+  Timesteps: 327,680
+  SPS: 16,009
+  Progress: 1.5% | Commission: $1.04
+  🎯 Exploration Bonus: $98.53 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 8.0% min probability for BUY/SELL (guarantees ~16% trading)
+  Mean episode return: 174.63
+  Policy loss: 0.0006
+  Value loss: 2471.9795
+  Entropy: 0.4480
+  ℹ️  Entropy high (0.448) - decreasing ent_coef to 0.142
+  Approx KL: 0.0019
+  Action dist: HOLD 66.0% | BUY 22.3% | SELL 11.6%
+  [Metrics] Trades: 10 | Win%: 90.0% | PnL: $59,336 | DD: $0
+Update 20/610
+  Timesteps: 655,360
+  SPS: 24,789
+  Progress: 3.1% | Commission: $1.09
+  🎯 Exploration Bonus: $96.89 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.9% min probability for BUY/SELL (guarantees ~16% trading)
+  Mean episode return: 169.86
+  Policy loss: 0.0000
+  Value loss: 3666.9219
+  Entropy: 0.4335
+  ℹ️  Entropy high (0.434) - decreasing ent_coef to 0.135
+  Approx KL: 0.0007
+  Action dist: HOLD 65.2% | BUY 22.4% | SELL 12.4%
+  [Metrics] Trades: 19 | Win%: 94.7% | PnL: $101,215 | DD: $3,407
+🔍 Quality Check (Update 20):
+  Quality Score: 0.60/1.00
+  ✅ Training healthy - no adjustments needed
+     Avg entropy: 0.434 | Avg trades: 0.0
+Update 30/610
+  Timesteps: 983,040
+  SPS: 30,328
+  Progress: 4.8% | Commission: $1.14
+  🎯 Exploration Bonus: $95.25 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.9% min probability for BUY/SELL (guarantees ~16% trading)
+  Mean episode return: 170.00
+  Policy loss: -0.0002
+  Value loss: 3819.0698
+  Entropy: 0.4286
+  ℹ️  Entropy high (0.429) - decreasing ent_coef to 0.129
+  Approx KL: 0.0002
+  Action dist: HOLD 64.6% | BUY 22.5% | SELL 12.9%
+  [Metrics] Trades: 24 | Win%: 95.8% | PnL: $124,467 | DD: $7,773
+Update 40/610
+  Timesteps: 1,310,720
+  SPS: 34,094
+  Progress: 6.4% | Commission: $1.19
+  🎯 Exploration Bonus: $93.61 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.8% min probability for BUY/SELL (guarantees ~16% trading)
+  Mean episode return: 173.82
+  Policy loss: -0.0001
+  Value loss: 4085.3711
+  Entropy: 0.3956
+  Approx KL: 0.0006
+  Action dist: HOLD 65.3% | BUY 21.9% | SELL 12.8%
+  [Metrics] Trades: 28 | Win%: 96.4% | PnL: $136,835 | DD: $8,750
+🔍 Quality Check (Update 40):
+  Quality Score: 0.59/1.00
+  ✅ Training healthy - no adjustments needed
+     Avg entropy: 0.415 | Avg trades: 0.0
+Update 50/610
+  Timesteps: 1,638,400
+  SPS: 42,191
+  Progress: 8.0% | Commission: $1.24
+  🎯 Exploration Bonus: $91.97 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.8% min probability for BUY/SELL (guarantees ~16% trading)
+  Mean episode return: 163.98
+  Policy loss: 0.0001
+  Value loss: 4032.6938
+  Entropy: 0.4204
+  ℹ️  Entropy high (0.420) - decreasing ent_coef to 0.122
+  Approx KL: 0.0002
+  Action dist: HOLD 65.0% | BUY 21.7% | SELL 13.3%
+  [Metrics] Trades: 32 | Win%: 96.9% | PnL: $146,885 | DD: $19,736
+Update 60/610
+  Timesteps: 1,966,080
+  SPS: 43,760
+  Progress: 9.7% | Commission: $1.29
+  🎯 Exploration Bonus: $90.33 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.7% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 174.44
+  Policy loss: 0.0003
+  Value loss: 4235.9160
+  Entropy: 0.3915
+  Approx KL: 0.0002
+  Action dist: HOLD 66.9% | BUY 22.5% | SELL 10.6%
+  [Metrics] Trades: 36 | Win%: 94.4% | PnL: $155,426 | DD: $19,736
+🔍 Quality Check (Update 60):
+  Quality Score: 0.59/1.00
+  ✅ Training healthy - no adjustments needed
+     Avg entropy: 0.407 | Avg trades: 0.0
+Update 70/610
+  Timesteps: 2,293,760
+  SPS: 50,689
+  Progress: 11.3% | Commission: $1.34
+  🎯 Exploration Bonus: $88.70 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.7% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 179.41
+  Policy loss: 0.0005
+  Value loss: 4605.5649
+  Entropy: 0.4039
+  ℹ️  Entropy high (0.404) - decreasing ent_coef to 0.116
+  Approx KL: 0.0004
+  Action dist: HOLD 65.5% | BUY 23.5% | SELL 11.0%
+  [Metrics] Trades: 41 | Win%: 95.1% | PnL: $170,287 | DD: $23,755
+Update 80/610
+  Timesteps: 2,621,440
+  SPS: 51,141
+  Progress: 13.0% | Commission: $1.39
+  🎯 Exploration Bonus: $87.06 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.6% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 168.66
+  Policy loss: 0.0004
+  Value loss: 5202.5391
+  Entropy: 0.3934
+  Approx KL: 0.0003
+  Action dist: HOLD 66.4% | BUY 22.4% | SELL 11.3%
+  [Metrics] Trades: 44 | Win%: 93.2% | PnL: $172,337 | DD: $26,286
+🔍 Quality Check (Update 80):
+  Quality Score: 0.59/1.00
+  ✅ Training healthy - no adjustments needed
+     Avg entropy: 0.403 | Avg trades: 0.0
+Update 90/610
+  Timesteps: 2,949,120
+  SPS: 57,155
+  Progress: 14.6% | Commission: $1.44
+  🎯 Exploration Bonus: $85.42 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.6% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 170.27
+  Policy loss: 0.0009
+  Value loss: 5486.5186
+  Entropy: 0.4154
+  ℹ️  Entropy high (0.415) - decreasing ent_coef to 0.110
+  Approx KL: 0.0005
+  Action dist: HOLD 65.7% | BUY 23.3% | SELL 11.0%
+  [Metrics] Trades: 49 | Win%: 91.8% | PnL: $187,107 | DD: $40,853
+Update 100/610
+  Timesteps: 3,276,800
+  SPS: 56,655
+  Progress: 16.2% | Commission: $1.49
+  🎯 Exploration Bonus: $83.78 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.5% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 191.61
+  Policy loss: 0.0014
+  Value loss: 6114.5103
+  Entropy: 0.4020
+  ℹ️  Entropy high (0.402) - decreasing ent_coef to 0.105
+  Approx KL: 0.0010
+  Action dist: HOLD 65.4% | BUY 24.4% | SELL 10.3%
+  [Metrics] Trades: 56 | Win%: 89.3% | PnL: $202,127 | DD: $40,853
+🔍 Quality Check (Update 100):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 110/610
+  Timesteps: 3,604,480
+  SPS: 56,324
+  Progress: 17.9% | Commission: $1.54
+  🎯 Exploration Bonus: $82.14 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.5% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 183.91
+  Policy loss: 0.0008
+  Value loss: 6267.2764
+  Entropy: 0.3928
+  Approx KL: 0.0007
+  Action dist: HOLD 65.0% | BUY 24.4% | SELL 10.6%
+  [Metrics] Trades: 63 | Win%: 90.5% | PnL: $220,371 | DD: $40,853
+Update 120/610
+  Timesteps: 3,932,160
+  SPS: 61,129
+  Progress: 19.5% | Commission: $1.59
+  🎯 Exploration Bonus: $80.50 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.4% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 162.65
+  Policy loss: -0.0003
+  Value loss: 7364.1431
+  Entropy: 0.4103
+  ℹ️  Entropy high (0.410) - decreasing ent_coef to 0.100
+  Approx KL: 0.0009
+  Action dist: HOLD 66.6% | BUY 22.0% | SELL 11.4%
+  [Metrics] Trades: 68 | Win%: 89.7% | PnL: $245,288 | DD: $40,853
+🔍 Quality Check (Update 120):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 130/610
+  Timesteps: 4,259,840
+  SPS: 60,566
+  Progress: 21.1% | Commission: $1.63
+  🎯 Exploration Bonus: $78.86 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.4% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 167.55
+  Policy loss: 0.0005
+  Value loss: 7930.9434
+  Entropy: 0.3644
+  Approx KL: 0.0005
+  Action dist: HOLD 66.7% | BUY 22.0% | SELL 11.3%
+  [Metrics] Trades: 73 | Win%: 90.4% | PnL: $256,964 | DD: $40,853
+Update 140/610
+  Timesteps: 4,587,520
+  SPS: 64,921
+  Progress: 22.8% | Commission: $1.68
+  🎯 Exploration Bonus: $77.23 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.3% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 177.93
+  Policy loss: -0.0014
+  Value loss: 8159.9746
+  Entropy: 0.4063
+  ℹ️  Entropy high (0.406) - decreasing ent_coef to 0.095
+  Approx KL: 0.0013
+  Action dist: HOLD 65.6% | BUY 23.4% | SELL 11.0%
+  [Metrics] Trades: 79 | Win%: 91.1% | PnL: $279,198 | DD: $40,853
+🔍 Quality Check (Update 140):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 150/610
+  Timesteps: 4,915,200
+  SPS: 64,116
+  Progress: 24.4% | Commission: $1.73
+  🎯 Exploration Bonus: $75.59 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.3% min probability for BUY/SELL (guarantees ~15% trading)
+  Mean episode return: 182.97
+  Policy loss: 0.0007
+  Value loss: 8609.4863
+  Entropy: 0.3809
+  Approx KL: 0.0006
+  Action dist: HOLD 65.6% | BUY 24.3% | SELL 10.1%
+  [Metrics] Trades: 85 | Win%: 91.8% | PnL: $296,952 | DD: $40,853
+Update 160/610
+  Timesteps: 5,242,880
+  SPS: 68,080
+  Progress: 26.1% | Commission: $1.78
+  🎯 Exploration Bonus: $73.95 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.2% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 184.78
+  Policy loss: 0.0003
+  Value loss: 9488.2617
+  Entropy: 0.3912
+  Approx KL: 0.0004
+  Action dist: HOLD 65.4% | BUY 23.9% | SELL 10.7%
+  [Metrics] Trades: 90 | Win%: 92.2% | PnL: $309,686 | DD: $40,853
+🔍 Quality Check (Update 160):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 170/610
+  Timesteps: 5,570,560
+  SPS: 72,011
+  Progress: 27.7% | Commission: $1.83
+  🎯 Exploration Bonus: $72.31 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.2% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 169.80
+  Policy loss: 0.0006
+  Value loss: 10516.5840
+  Entropy: 0.3991
+  Approx KL: 0.0005
+  Action dist: HOLD 65.6% | BUY 23.0% | SELL 11.4%
+  [Metrics] Trades: 96 | Win%: 92.7% | PnL: $339,518 | DD: $40,853
+Update 180/610
+  Timesteps: 5,898,240
+  SPS: 75,907
+  Progress: 29.3% | Commission: $1.88
+  🎯 Exploration Bonus: $70.67 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.1% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 176.18
+  Policy loss: 0.0000
+  Value loss: 11095.0918
+  Entropy: 0.4103
+  ℹ️  Entropy high (0.410) - decreasing ent_coef to 0.090
+  Approx KL: 0.0002
+  Action dist: HOLD 65.0% | BUY 23.3% | SELL 11.7%
+  [Metrics] Trades: 101 | Win%: 93.1% | PnL: $347,796 | DD: $40,853
+🔍 Quality Check (Update 180):
+  Quality Score: 0.60/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 190/610
+  Timesteps: 6,225,920
+  SPS: 74,396
+  Progress: 31.0% | Commission: $1.93
+  🎯 Exploration Bonus: $69.03 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.1% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 182.66
+  Policy loss: 0.0003
+  Value loss: 11406.4678
+  Entropy: 0.3917
+  Approx KL: 0.0003
+  Action dist: HOLD 65.1% | BUY 24.2% | SELL 10.7%
+  [Metrics] Trades: 106 | Win%: 91.5% | PnL: $362,567 | DD: $40,853
+Update 200/610
+  Timesteps: 6,553,600
+  SPS: 78,021
+  Progress: 32.6% | Commission: $1.98
+  🎯 Exploration Bonus: $67.40 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.0% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 174.85
+  Policy loss: -0.0002
+  Value loss: 12418.2910
+  Entropy: 0.3861
+  Approx KL: 0.0002
+  Action dist: HOLD 66.1% | BUY 23.1% | SELL 10.9%
+  [Metrics] Trades: 110 | Win%: 91.8% | PnL: $382,073 | DD: $40,853
+🔍 Quality Check (Update 200):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 210/610
+  Timesteps: 6,881,280
+  SPS: 81,617
+  Progress: 34.3% | Commission: $2.03
+  🎯 Exploration Bonus: $65.76 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 7.0% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 180.93
+  Policy loss: 0.0004
+  Value loss: 13827.7783
+  Entropy: 0.3808
+  Approx KL: 0.0003
+  Action dist: HOLD 65.5% | BUY 24.3% | SELL 10.2%
+  [Metrics] Trades: 116 | Win%: 91.4% | PnL: $393,795 | DD: $40,853
+Update 220/610
+  Timesteps: 7,208,960
+  SPS: 85,168
+  Progress: 35.9% | Commission: $2.08
+  🎯 Exploration Bonus: $64.12 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.9% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 172.44
+  Policy loss: 0.0000
+  Value loss: 14080.2227
+  Entropy: 0.3723
+  Approx KL: 0.0004
+  Action dist: HOLD 65.7% | BUY 23.6% | SELL 10.7%
+  [Metrics] Trades: 121 | Win%: 90.9% | PnL: $402,599 | DD: $40,853
+🔍 Quality Check (Update 220):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 230/610
+  Timesteps: 7,536,640
+  SPS: 88,675
+  Progress: 37.5% | Commission: $2.13
+  🎯 Exploration Bonus: $62.48 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.9% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 167.24
+  Policy loss: 0.0003
+  Value loss: 13655.6504
+  Entropy: 0.3959
+  Approx KL: 0.0004
+  Action dist: HOLD 66.6% | BUY 22.8% | SELL 10.6%
+  [Metrics] Trades: 126 | Win%: 91.3% | PnL: $426,859 | DD: $40,853
+Update 240/610
+  Timesteps: 7,864,320
+  SPS: 92,163
+  Progress: 39.2% | Commission: $2.18
+  🎯 Exploration Bonus: $60.84 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.8% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 161.67
+  Policy loss: 0.0006
+  Value loss: 13526.3027
+  Entropy: 0.4087
+  ℹ️  Entropy high (0.409) - decreasing ent_coef to 0.085
+  Approx KL: 0.0005
+  Action dist: HOLD 66.3% | BUY 23.2% | SELL 10.4%
+  [Metrics] Trades: 134 | Win%: 90.3% | PnL: $442,844 | DD: $40,853
+🔍 Quality Check (Update 240):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 250/610
+  Timesteps: 8,192,000
+  SPS: 89,698
+  Progress: 40.8% | Commission: $2.22
+  🎯 Exploration Bonus: $59.20 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.8% min probability for BUY/SELL (guarantees ~14% trading)
+  Mean episode return: 173.31
+  Policy loss: 0.0002
+  Value loss: 12208.6797
+  Entropy: 0.3858
+  Approx KL: 0.0006
+  Action dist: HOLD 66.0% | BUY 23.6% | SELL 10.3%
+  [Metrics] Trades: 140 | Win%: 90.7% | PnL: $465,983 | DD: $40,853
+Update 260/610
+  Timesteps: 8,519,680
+  SPS: 92,944
+  Progress: 42.5% | Commission: $2.27
+  🎯 Exploration Bonus: $57.57 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.7% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 164.56
+  Policy loss: 0.0002
+  Value loss: 12387.2461
+  Entropy: 0.3983
+  Approx KL: 0.0009
+  Action dist: HOLD 65.4% | BUY 23.9% | SELL 10.6%
+  [Metrics] Trades: 149 | Win%: 91.3% | PnL: $495,635 | DD: $40,853
+🔍 Quality Check (Update 260):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 270/610
+  Timesteps: 8,847,360
+  SPS: 96,175
+  Progress: 44.1% | Commission: $2.32
+  🎯 Exploration Bonus: $55.93 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.7% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 175.87
+  Policy loss: -0.0005
+  Value loss: 12067.6943
+  Entropy: 0.3768
+  Approx KL: 0.0005
+  Action dist: HOLD 66.7% | BUY 23.6% | SELL 9.7%
+  [Metrics] Trades: 154 | Win%: 91.6% | PnL: $510,889 | DD: $40,853
+Update 280/610
+  Timesteps: 9,175,040
+  SPS: 99,386
+  Progress: 45.7% | Commission: $2.37
+  🎯 Exploration Bonus: $54.29 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.6% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 168.72
+  Policy loss: 0.0004
+  Value loss: 11524.2871
+  Entropy: 0.3677
+  Approx KL: 0.0003
+  Action dist: HOLD 65.9% | BUY 24.0% | SELL 10.2%
+  [Metrics] Trades: 160 | Win%: 91.9% | PnL: $529,051 | DD: $40,853
+🔍 Quality Check (Update 280):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 290/610
+  Timesteps: 9,502,720
+  SPS: 102,573
+  Progress: 47.4% | Commission: $2.42
+  🎯 Exploration Bonus: $52.65 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.6% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 178.98
+  Policy loss: -0.0003
+  Value loss: 10446.5020
+  Entropy: 0.3876
+  Approx KL: 0.0002
+  Action dist: HOLD 65.5% | BUY 24.8% | SELL 9.7%
+  [Metrics] Trades: 167 | Win%: 92.2% | PnL: $555,890 | DD: $40,853
+Update 300/610
+  Timesteps: 9,830,400
+  SPS: 105,735
+  Progress: 49.0% | Commission: $2.47
+  🎯 Exploration Bonus: $51.01 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.5% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 172.60
+  Policy loss: 0.0001
+  Value loss: 10472.6641
+  Entropy: 0.3939
+  Approx KL: 0.0006
+  Action dist: HOLD 66.3% | BUY 23.1% | SELL 10.5%
+  [Metrics] Trades: 176 | Win%: 92.6% | PnL: $584,600 | DD: $40,853
+🔍 Quality Check (Update 300):
+  Quality Score: 0.58/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 310/610
+  Timesteps: 10,158,080
+  SPS: 108,848
+  Progress: 50.7% | Commission: $2.50
+  🎯 Exploration Bonus: $49.37 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.5% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 159.93
+  Policy loss: -0.0000
+  Value loss: 8863.9551
+  Entropy: 0.4008
+  ℹ️  Entropy high (0.401) - decreasing ent_coef to 0.081
+  Approx KL: 0.0008
+  Action dist: HOLD 64.8% | BUY 24.3% | SELL 10.9%
+  [Metrics] Trades: 180 | Win%: 92.8% | PnL: $597,783 | DD: $40,853
+Update 320/610
+  Timesteps: 10,485,760
+  SPS: 105,671
+  Progress: 52.3% | Commission: $2.50
+  🎯 Exploration Bonus: $47.74 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.4% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 168.67
+  Policy loss: -0.0001
+  Value loss: 8260.3652
+  Entropy: 0.3754
+  Approx KL: 0.0006
+  Action dist: HOLD 66.9% | BUY 22.6% | SELL 10.5%
+  [Metrics] Trades: 187 | Win%: 93.0% | PnL: $623,046 | DD: $40,853
+🔍 Quality Check (Update 320):
+  Quality Score: 0.58/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 330/610
+  Timesteps: 10,813,440
+  SPS: 108,610
+  Progress: 53.9% | Commission: $2.50
+  🎯 Exploration Bonus: $46.10 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.4% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 169.60
+  Policy loss: 0.0007
+  Value loss: 7611.1758
+  Entropy: 0.3878
+  Approx KL: 0.0003
+  Action dist: HOLD 65.5% | BUY 24.5% | SELL 10.0%
+  [Metrics] Trades: 191 | Win%: 93.2% | PnL: $637,951 | DD: $40,853
+Update 340/610
+  Timesteps: 11,141,120
+  SPS: 111,533
+  Progress: 55.6% | Commission: $2.50
+  🎯 Exploration Bonus: $44.46 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.3% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 171.61
+  Policy loss: -0.0002
+  Value loss: 8483.2559
+  Entropy: 0.3852
+  Approx KL: 0.0006
+  Action dist: HOLD 66.3% | BUY 24.0% | SELL 9.8%
+  [Metrics] Trades: 194 | Win%: 93.3% | PnL: $650,955 | DD: $43,617
+🔍 Quality Check (Update 340):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 350/610
+  Timesteps: 11,468,800
+  SPS: 114,424
+  Progress: 57.2% | Commission: $2.50
+  🎯 Exploration Bonus: $42.82 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.3% min probability for BUY/SELL (guarantees ~13% trading)
+  Mean episode return: 168.95
+  Policy loss: -0.0003
+  Value loss: 7893.9624
+  Entropy: 0.3773
+  Approx KL: 0.0005
+  Action dist: HOLD 65.8% | BUY 24.2% | SELL 10.1%
+  [Metrics] Trades: 201 | Win%: 93.5% | PnL: $673,765 | DD: $43,617
+Update 360/610
+  Timesteps: 11,796,480
+  SPS: 117,310
+  Progress: 58.9% | Commission: $2.50
+  🎯 Exploration Bonus: $41.18 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.2% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 171.25
+  Policy loss: -0.0007
+  Value loss: 8011.9512
+  Entropy: 0.3556
+  Approx KL: 0.0008
+  Action dist: HOLD 65.8% | BUY 24.3% | SELL 9.9%
+  [Metrics] Trades: 208 | Win%: 93.3% | PnL: $697,742 | DD: $43,617
+🔍 Quality Check (Update 360):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 370/610
+  Timesteps: 12,124,160
+  SPS: 120,170
+  Progress: 60.5% | Commission: $2.50
+  🎯 Exploration Bonus: $39.54 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.2% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 165.69
+  Policy loss: -0.0002
+  Value loss: 8359.8184
+  Entropy: 0.3974
+  Approx KL: 0.0007
+  Action dist: HOLD 65.2% | BUY 23.5% | SELL 11.2%
+  [Metrics] Trades: 212 | Win%: 93.4% | PnL: $713,912 | DD: $43,617
+Update 380/610
+  Timesteps: 12,451,840
+  SPS: 123,013
+  Progress: 62.1% | Commission: $2.50
+  🎯 Exploration Bonus: $37.90 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.1% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 163.19
+  Policy loss: -0.0001
+  Value loss: 7924.0479
+  Entropy: 0.3819
+  Approx KL: 0.0003
+  Action dist: HOLD 65.7% | BUY 24.0% | SELL 10.3%
+  [Metrics] Trades: 221 | Win%: 93.2% | PnL: $743,486 | DD: $43,617
+🔍 Quality Check (Update 380):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 390/610
+  Timesteps: 12,779,520
+  SPS: 125,829
+  Progress: 63.8% | Commission: $2.50
+  🎯 Exploration Bonus: $36.27 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.1% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 169.58
+  Policy loss: 0.0005
+  Value loss: 8035.4375
+  Entropy: 0.3769
+  Approx KL: 0.0005
+  Action dist: HOLD 65.7% | BUY 25.2% | SELL 9.1%
+  [Metrics] Trades: 225 | Win%: 93.3% | PnL: $763,856 | DD: $43,617
+Update 400/610
+  Timesteps: 13,107,200
+  SPS: 128,627
+  Progress: 65.4% | Commission: $2.50
+  🎯 Exploration Bonus: $34.63 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.0% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 171.00
+  Policy loss: 0.0000
+  Value loss: 7645.2134
+  Entropy: 0.3866
+  Approx KL: 0.0004
+  Action dist: HOLD 65.0% | BUY 24.9% | SELL 10.2%
+  [Metrics] Trades: 230 | Win%: 93.5% | PnL: $778,858 | DD: $43,617
+🔍 Quality Check (Update 400):
+  Quality Score: 0.60/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 410/610
+  Timesteps: 13,434,880
+  SPS: 131,446
+  Progress: 67.0% | Commission: $2.50
+  🎯 Exploration Bonus: $32.99 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 6.0% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 162.20
+  Policy loss: -0.0002
+  Value loss: 7544.1255
+  Entropy: 0.3658
+  Approx KL: 0.0003
+  Action dist: HOLD 67.2% | BUY 23.3% | SELL 9.4%
+  [Metrics] Trades: 233 | Win%: 93.6% | PnL: $791,539 | DD: $43,617
+Update 420/610
+  Timesteps: 13,762,560
+  SPS: 134,244
+  Progress: 68.7% | Commission: $2.50
+  🎯 Exploration Bonus: $31.35 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.9% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 179.03
+  Policy loss: 0.0003
+  Value loss: 7189.6562
+  Entropy: 0.3681
+  Approx KL: 0.0009
+  Action dist: HOLD 65.6% | BUY 25.5% | SELL 8.9%
+  [Metrics] Trades: 238 | Win%: 93.7% | PnL: $801,843 | DD: $54,264
+🔍 Quality Check (Update 420):
+  Quality Score: 0.60/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 430/610
+  Timesteps: 14,090,240
+  SPS: 136,995
+  Progress: 70.3% | Commission: $2.50
+  🎯 Exploration Bonus: $29.71 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.9% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 172.31
+  Policy loss: 0.0003
+  Value loss: 6597.0630
+  Entropy: 0.3829
+  Approx KL: 0.0006
+  Action dist: HOLD 65.9% | BUY 24.0% | SELL 10.1%
+  [Metrics] Trades: 247 | Win%: 93.9% | PnL: $846,476 | DD: $54,264
+Update 440/610
+  Timesteps: 14,417,920
+  SPS: 139,724
+  Progress: 72.0% | Commission: $2.50
+  🎯 Exploration Bonus: $28.07 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.8% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 172.39
+  Policy loss: 0.0002
+  Value loss: 6900.2598
+  Entropy: 0.3526
+  Approx KL: 0.0006
+  Action dist: HOLD 65.7% | BUY 25.8% | SELL 8.5%
+  [Metrics] Trades: 256 | Win%: 94.1% | PnL: $873,963 | DD: $54,264
+🔍 Quality Check (Update 440):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 450/610
+  Timesteps: 14,745,600
+  SPS: 142,440
+  Progress: 73.6% | Commission: $2.50
+  🎯 Exploration Bonus: $26.44 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.8% min probability for BUY/SELL (guarantees ~12% trading)
+  Mean episode return: 164.93
+  Policy loss: 0.0002
+  Value loss: 5602.9839
+  Entropy: 0.3496
+  Approx KL: 0.0004
+  Action dist: HOLD 66.2% | BUY 24.8% | SELL 8.9%
+  [Metrics] Trades: 260 | Win%: 94.2% | PnL: $890,705 | DD: $54,264
+Update 460/610
+  Timesteps: 15,073,280
+  SPS: 145,142
+  Progress: 75.2% | Commission: $2.50
+  🎯 Exploration Bonus: $24.80 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.7% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 163.14
+  Policy loss: 0.0004
+  Value loss: 5861.4009
+  Entropy: 0.3804
+  Approx KL: 0.0004
+  Action dist: HOLD 66.7% | BUY 24.2% | SELL 9.1%
+  [Metrics] Trades: 263 | Win%: 94.3% | PnL: $899,147 | DD: $54,264
+🔍 Quality Check (Update 460):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 470/610
+  Timesteps: 15,400,960
+  SPS: 147,828
+  Progress: 76.9% | Commission: $2.50
+  🎯 Exploration Bonus: $23.16 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.7% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 170.87
+  Policy loss: -0.0000
+  Value loss: 6139.9648
+  Entropy: 0.3797
+  Approx KL: 0.0005
+  Action dist: HOLD 65.8% | BUY 23.6% | SELL 10.6%
+  [Metrics] Trades: 268 | Win%: 94.4% | PnL: $921,412 | DD: $54,264
+Update 480/610
+  Timesteps: 15,728,640
+  SPS: 150,486
+  Progress: 78.5% | Commission: $2.50
+  🎯 Exploration Bonus: $21.52 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.6% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 168.55
+  Policy loss: 0.0000
+  Value loss: 6187.6543
+  Entropy: 0.3652
+  Approx KL: 0.0006
+  Action dist: HOLD 66.1% | BUY 24.9% | SELL 8.9%
+  [Metrics] Trades: 272 | Win%: 94.5% | PnL: $936,512 | DD: $54,264
+🔍 Quality Check (Update 480):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 490/610
+  Timesteps: 16,056,320
+  SPS: 153,132
+  Progress: 80.2% | Commission: $2.50
+  🎯 Exploration Bonus: $19.88 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.6% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 174.16
+  Policy loss: 0.0007
+  Value loss: 6073.4673
+  Entropy: 0.3923
+  Approx KL: 0.0007
+  Action dist: HOLD 65.3% | BUY 24.0% | SELL 10.7%
+  [Metrics] Trades: 276 | Win%: 94.6% | PnL: $956,412 | DD: $54,264
+Update 500/610
+  Timesteps: 16,384,000
+  SPS: 155,770
+  Progress: 81.8% | Commission: $2.50
+  🎯 Exploration Bonus: $18.24 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.5% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 173.83
+  Policy loss: 0.0005
+  Value loss: 5323.8770
+  Entropy: 0.3698
+  Approx KL: 0.0006
+  Action dist: HOLD 65.6% | BUY 26.2% | SELL 8.2%
+  [Metrics] Trades: 282 | Win%: 94.7% | PnL: $974,901 | DD: $54,264
+🔍 Quality Check (Update 500):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+  [MEMORY] Cleared JAX caches at update 500
+Update 510/610
+  Timesteps: 16,711,680
+  SPS: 144,166
+  Progress: 83.4% | Commission: $2.50
+  🎯 Exploration Bonus: $16.61 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.5% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 169.44
+  Policy loss: 0.0002
+  Value loss: 4786.9653
+  Entropy: 0.3208
+  Approx KL: 0.0005
+  Action dist: HOLD 68.1% | BUY 24.0% | SELL 7.9%
+  [Metrics] Trades: 285 | Win%: 94.7% | PnL: $994,816 | DD: $54,264
+Update 520/610
+  Timesteps: 17,039,360
+  SPS: 146,528
+  Progress: 85.1% | Commission: $2.50
+  🎯 Exploration Bonus: $14.97 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.4% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 167.83
+  Policy loss: 0.0000
+  Value loss: 4893.1016
+  Entropy: 0.3509
+  Approx KL: 0.0005
+  Action dist: HOLD 66.4% | BUY 24.1% | SELL 9.4%
+  [Metrics] Trades: 289 | Win%: 94.8% | PnL: $1,000,541 | DD: $63,338
+🔍 Quality Check (Update 520):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 530/610
+  Timesteps: 17,367,040
+  SPS: 148,855
+  Progress: 86.7% | Commission: $2.50
+  🎯 Exploration Bonus: $13.33 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.4% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 158.73
+  Policy loss: 0.0004
+  Value loss: 5501.9941
+  Entropy: 0.3781
+  Approx KL: 0.0003
+  Action dist: HOLD 64.4% | BUY 25.0% | SELL 10.6%
+  [Metrics] Trades: 295 | Win%: 94.9% | PnL: $1,017,357 | DD: $63,338
+Update 540/610
+  Timesteps: 17,694,720
+  SPS: 151,233
+  Progress: 88.4% | Commission: $2.50
+  🎯 Exploration Bonus: $11.69 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.4% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 166.31
+  Policy loss: -0.0003
+  Value loss: 6811.8447
+  Entropy: 0.3801
+  Approx KL: 0.0005
+  Action dist: HOLD 66.6% | BUY 24.6% | SELL 8.9%
+  [Metrics] Trades: 304 | Win%: 95.1% | PnL: $1,039,580 | DD: $63,338
+🔍 Quality Check (Update 540):
+  Quality Score: 0.59/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 550/610
+  Timesteps: 18,022,400
+  SPS: 153,621
+  Progress: 90.0% | Commission: $2.50
+  🎯 Exploration Bonus: $10.05 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.3% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 157.59
+  Policy loss: -0.0001
+  Value loss: 6370.8662
+  Entropy: 0.3573
+  Approx KL: 0.0004
+  Action dist: HOLD 68.2% | BUY 23.5% | SELL 8.4%
+  [Metrics] Trades: 311 | Win%: 95.2% | PnL: $1,063,837 | DD: $63,338
+Update 560/610
+  Timesteps: 18,350,080
+  SPS: 155,993
+  Progress: 91.6% | Commission: $2.50
+  🎯 Exploration Bonus: $8.41 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.3% min probability for BUY/SELL (guarantees ~11% trading)
+  Mean episode return: 158.68
+  Policy loss: 0.0007
+  Value loss: 5491.9209
+  Entropy: 0.3541
+  Approx KL: 0.0007
+  Action dist: HOLD 67.5% | BUY 24.4% | SELL 8.2%
+  [Metrics] Trades: 313 | Win%: 95.2% | PnL: $1,068,374 | DD: $63,338
+🔍 Quality Check (Update 560):
+  Quality Score: 0.58/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 570/610
+  Timesteps: 18,677,760
+  SPS: 158,334
+  Progress: 93.3% | Commission: $2.50
+  🎯 Exploration Bonus: $6.78 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.2% min probability for BUY/SELL (guarantees ~10% trading)
+  Mean episode return: 162.90
+  Policy loss: 0.0007
+  Value loss: 6411.4771
+  Entropy: 0.3672
+  Approx KL: 0.0004
+  Action dist: HOLD 67.6% | BUY 23.2% | SELL 9.2%
+  [Metrics] Trades: 316 | Win%: 95.3% | PnL: $1,092,772 | DD: $63,338
+Update 580/610
+  Timesteps: 19,005,440
+  SPS: 160,623
+  Progress: 94.9% | Commission: $2.50
+  🎯 Exploration Bonus: $5.14 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.2% min probability for BUY/SELL (guarantees ~10% trading)
+  Mean episode return: 166.25
+  Policy loss: 0.0003
+  Value loss: 5951.8359
+  Entropy: 0.3683
+  Approx KL: 0.0008
+  Action dist: HOLD 66.7% | BUY 24.5% | SELL 8.8%
+  [Metrics] Trades: 321 | Win%: 95.3% | PnL: $1,114,961 | DD: $63,338
+🔍 Quality Check (Update 580):
+  Quality Score: 0.58/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 590/610
+  Timesteps: 19,333,120
+  SPS: 162,940
+  Progress: 96.6% | Commission: $2.50
+  🎯 Exploration Bonus: $3.50 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.1% min probability for BUY/SELL (guarantees ~10% trading)
+  Mean episode return: 150.02
+  Policy loss: -0.0003
+  Value loss: 6008.4248
+  Entropy: 0.3655
+  Approx KL: 0.0010
+  Action dist: HOLD 67.4% | BUY 22.9% | SELL 9.7%
+  [Metrics] Trades: 328 | Win%: 95.4% | PnL: $1,141,305 | DD: $63,338
+Update 600/610
+  Timesteps: 19,660,800
+  SPS: 165,244
+  Progress: 98.2% | Commission: $2.50
+  🎯 Exploration Bonus: $1.86 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.1% min probability for BUY/SELL (guarantees ~10% trading)
+  Mean episode return: 150.97
+  Policy loss: -0.0007
+  Value loss: 5313.4473
+  Entropy: 0.3819
+  Approx KL: 0.0008
+  Action dist: HOLD 66.7% | BUY 23.5% | SELL 9.8%
+  [Metrics] Trades: 333 | Win%: 95.5% | PnL: $1,163,735 | DD: $63,338
+🔍 Quality Check (Update 600):
+  Quality Score: 0.58/1.00
+  ⚙️  Auto-adjustments triggered:
+Update 610/610
+  Timesteps: 19,988,480
+  SPS: 167,536
+  Progress: 99.8% | Commission: $2.50
+  🎯 Exploration Bonus: $0.22 (decays to $0 at 20,000,000 steps)
+  🎯 Action Floor: 5.0% min probability for BUY/SELL (guarantees ~10% trading)
+  Mean episode return: 165.72
+  Policy loss: 0.0003
+  Value loss: 5252.3291
+  Entropy: 0.3368
+  Approx KL: 0.0003
+  Action dist: HOLD 66.4% | BUY 25.1% | SELL 8.5%
+  [Metrics] Trades: 339 | Win%: 95.6% | PnL: $1,181,893 | DD: $63,338
+Training complete!
+  Total time: 119.3s
+  Final SPS: 167,601
+Final metrics:
+  Mean return: 165.72
+  SPS: 167,536
+Saving checkpoints to /workspace/models/phase1_jax_nq...
+  ✓ Saved final model checkpoint
+  ✓ Saved normalizer to normalizer_final.pkl
+  ✓ Saved training metrics to training_metrics_NQ.json
+  ✓ Saved metadata to metadata.json
+✅ Phase 1 training complete! Models saved in /workspace/models/phase1_jax_nq/

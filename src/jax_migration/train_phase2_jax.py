@@ -13,7 +13,7 @@ import numpy as np
 import os
 import time
 import pickle
-from typing import Tuple, NamedTuple, Any, Dict
+from typing import Tuple, NamedTuple, Any, Dict, Optional
 from functools import partial
 import yaml
 
@@ -37,6 +37,7 @@ from src.jax_migration.train_ppo_jax_fixed import (
     masked_softmax
 )
 from src.jax_migration.training_metrics_tracker import TrainingMetricsTracker
+from src.market_specs import get_market_spec, MARKET_SPECS
 
 class Colors:
     """Simple color constants for terminal output."""
@@ -261,17 +262,23 @@ def load_phase1_and_transfer(
 
 import flax
 
-@partial(jax.jit, static_argnums=(1, 3, 4))
+# MEMORY FIX (2025-12-08): Removed env_params (arg 1) from static_argnums
+# env_params changes every update due to curriculum values (training_progress, 
+# exploration bonuses, forced_position_ratio). Keeping it static caused JAX to
+# recompile on every iteration, leaking ~10-50 MB per update → server crash.
+@partial(jax.jit, static_argnums=(3, 4))  # Only num_steps and num_envs are truly static
 def collect_rollouts_phase2(
     runner_state: RunnerState,
     env_params: EnvParamsPhase2,
     data: MarketData,
     num_steps: int,
-    num_envs: int
+    num_envs: int,
+    exploration_floor: float = 0.0  # CRITICAL FIX: Add PM action floor
 ) -> Tuple[Transition, RunnerState, jnp.ndarray]:
     """
     Collect rollouts for Phase 2.
     Identical to Phase 1 but uses Phase 2 env functions.
+    HOLD TRAP FIX: Now supports exploration_floor for PM action sampling.
     """
     train_state, env_states, normalizer, key, update_step = runner_state
     
@@ -289,8 +296,13 @@ def collect_rollouts_phase2(
         logits, values = train_state.apply_fn(train_state.params, obs_normalized)
         
         key_actions = jax.random.split(key_action, num_envs)
-        actions = jax.vmap(sample_action)(key_actions, logits, masks)
-        log_probs = jax.vmap(log_prob_action)(logits, actions, masks)
+        # CRITICAL FIX: Pass exploration_floor to ensure PM action floor is applied
+        actions = jax.vmap(lambda k, l, m: sample_action(k, l, m, exploration_floor))(
+            key_actions, logits, masks
+        )
+        log_probs = jax.vmap(lambda l, a, m: log_prob_action(l, a, m, exploration_floor))(
+            logits, actions, masks
+        )
         
         key_steps = jax.random.split(key_step, num_envs)
         next_obs, next_states, rewards, dones, infos = batch_step_phase2(
@@ -368,6 +380,27 @@ def get_batched_observations_phase2(env_states, data, params):
         lambda state: get_observation_phase2(state, data, params)
     )(env_states)
 
+def find_latest_checkpoint(checkpoint_dir: str) -> tuple[Optional[str], Optional[int]]:
+    """Find the most recent checkpoint in the directory.
+
+    Returns:
+        (checkpoint_path, step_number) or (None, None) if no checkpoints found
+    """
+    if not os.path.exists(checkpoint_dir):
+        return None, None
+
+    checkpoint_dirs = sorted([
+        d for d in Path(checkpoint_dir).iterdir()
+        if d.is_dir() and d.name.startswith("phase2_jax_") and not d.name.endswith("_final")
+    ], key=lambda x: int(x.name.split("_")[-1]))
+
+    if not checkpoint_dirs:
+        return None, None
+
+    latest_checkpoint = checkpoint_dirs[-1]
+    step_number = int(latest_checkpoint.name.split("_")[-1])
+    return str(latest_checkpoint), step_number
+
 def train_phase2(
     config: PPOConfig,
     env_params: EnvParamsPhase2,
@@ -375,7 +408,9 @@ def train_phase2(
     phase1_checkpoint: str = None,
     checkpoint_dir: str = "models/phase2_jax",
     market: str = "NQ",
-    seed: int = 0
+    seed: int = 0,
+    resume: bool = False,
+    resume_from: Optional[str] = None
 ) -> RunnerState:
     """Main training loop for Phase 2."""
     
@@ -420,25 +455,95 @@ def train_phase2(
     key, network_key = jax.random.split(key)
     
     obs_shape = (expected_obs_dim,)
-    
+
+    # Calculate num_updates early (needed for resume messages)
+    num_updates = config.total_timesteps // (config.num_envs * config.num_steps)
+    if num_updates == 0:
+        print(f"[WARN] Total timesteps ({config.total_timesteps}) < Batch size ({config.num_envs * config.num_steps}). Running 1 update.")
+        num_updates = 1
+
     # Create initial train_state
     train_state = create_train_state(network_key, obs_shape, config, num_actions=6)
-    
-    # If transfer learning, get transferred params and recreate train_state
-    if phase1_checkpoint:
-        print(f"\n{Colors.CYAN}[TRANSFER] Applying transfer learning from Phase 1{Colors.RESET}")
-        transferred_params = load_phase1_and_transfer(train_state.params, phase1_checkpoint, config)
-        
-        # Recreate train_state with transferred params to reinitialize optimizer state
-        print(f"{Colors.CYAN}[TRANSFER] Recreating TrainState with transferred params{Colors.RESET}")
-        train_state = TrainState.create(
-            apply_fn=train_state.apply_fn,
-            params=transferred_params,
-            tx=train_state.tx
-        )
-        print(f"{Colors.GREEN}✓ Transfer learning complete{Colors.RESET}\n")
-        
-    normalizer = create_normalizer(obs_shape)
+
+    # Checkpoint resumption
+    initial_update = 0
+    resume_checkpoint_path = None
+    resume_step = None
+
+    if resume or resume_from:
+        if resume_from:
+            # User specified exact checkpoint
+            resume_checkpoint_path = os.path.join(checkpoint_dir, resume_from)
+            if not os.path.exists(resume_checkpoint_path):
+                print(f"{Colors.RED}[ERROR] Specified checkpoint not found: {resume_checkpoint_path}{Colors.RESET}")
+                sys.exit(1)
+            resume_step = int(resume_from.split("_")[-1])
+        else:
+            # Auto-detect latest checkpoint
+            resume_checkpoint_path, resume_step = find_latest_checkpoint(checkpoint_dir)
+
+        if resume_checkpoint_path and resume_step:
+            print(f"\n{Colors.YELLOW}[RESUME] Found checkpoint: {os.path.basename(resume_checkpoint_path)} (update {resume_step}){Colors.RESET}")
+
+            if not resume_from:  # Only prompt if auto-detected
+                user_input = input(f"Resume from update {resume_step}? (y/n): ").strip().lower()
+                if user_input != 'y':
+                    print(f"{Colors.CYAN}Starting fresh training...{Colors.RESET}")
+                    resume_checkpoint_path = None
+                    resume_step = None
+
+            if resume_checkpoint_path:
+                print(f"{Colors.CYAN}[RESUME] Restoring checkpoint...{Colors.RESET}")
+
+                try:
+                    # Restore train_state using Orbax
+                    restored_state = checkpoints.restore_checkpoint(
+                        ckpt_dir=resume_checkpoint_path,
+                        target=train_state,
+                        step=None  # Use step from directory
+                    )
+                    train_state = restored_state
+                    print(f"{Colors.GREEN}✓ Restored model checkpoint{Colors.RESET}")
+
+                    # Restore normalizer
+                    normalizer_path = os.path.join(checkpoint_dir, f"normalizer_{resume_step}.pkl")
+                    if os.path.exists(normalizer_path):
+                        with open(normalizer_path, "rb") as f:
+                            normalizer = pickle.load(f)
+                        print(f"{Colors.GREEN}✓ Restored normalizer from step {resume_step}{Colors.RESET}")
+                    else:
+                        print(f"{Colors.YELLOW}[WARN] Normalizer not found for step {resume_step}, using fresh normalizer{Colors.RESET}")
+                        normalizer = create_normalizer(obs_shape)
+
+                    initial_update = resume_step
+                    print(f"{Colors.GREEN}✓ Resuming from update {initial_update}/{num_updates}{Colors.RESET}\n")
+
+                except Exception as e:
+                    print(f"{Colors.RED}[ERROR] Failed to restore checkpoint: {e}{Colors.RESET}")
+                    print(f"{Colors.YELLOW}Starting fresh training...{Colors.RESET}")
+                    initial_update = 0
+                    normalizer = create_normalizer(obs_shape)
+        else:
+            print(f"{Colors.YELLOW}[RESUME] No checkpoints found in {checkpoint_dir}{Colors.RESET}")
+            print(f"{Colors.CYAN}Starting fresh training...{Colors.RESET}")
+            normalizer = create_normalizer(obs_shape)
+    else:
+        # No resume - standard initialization
+        # If transfer learning, get transferred params and recreate train_state
+        if phase1_checkpoint:
+            print(f"\n{Colors.CYAN}[TRANSFER] Applying transfer learning from Phase 1{Colors.RESET}")
+            transferred_params = load_phase1_and_transfer(train_state.params, phase1_checkpoint, config)
+
+            # Recreate train_state with transferred params to reinitialize optimizer state
+            print(f"{Colors.CYAN}[TRANSFER] Recreating TrainState with transferred params{Colors.RESET}")
+            train_state = TrainState.create(
+                apply_fn=train_state.apply_fn,
+                params=transferred_params,
+                tx=train_state.tx
+            )
+            print(f"{Colors.GREEN}✓ Transfer learning complete{Colors.RESET}\n")
+
+        normalizer = create_normalizer(obs_shape)
     
     key, reset_key = jax.random.split(key)
     obs, env_states = batch_reset_phase2(
@@ -453,18 +558,15 @@ def train_phase2(
         env_states=env_states,
         normalizer=normalizer,
         key=key,
-        update_step=jnp.array(0)
+        update_step=jnp.array(initial_update)
     )
-    
-    num_updates = config.total_timesteps // (config.num_envs * config.num_steps)
-    if num_updates == 0:
-        print(f"[WARN] Total timesteps ({config.total_timesteps}) < Batch size ({config.num_envs * config.num_steps}). Running 1 update.")
-        num_updates = 1
-    
+
     print(f"Starting Phase 2 Training:")
     print(f"  Total timesteps: {config.total_timesteps:,}")
     print(f"  Num envs: {config.num_envs}")
     print(f"  Checkpoint dir: {checkpoint_dir}")
+    if initial_update > 0:
+        print(f"  Resuming from update: {initial_update}/{num_updates}")
     
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
@@ -487,8 +589,8 @@ def train_phase2(
     
     # Import train_step from fixed PPO (it's generic)
     from src.jax_migration.train_ppo_jax_fixed import train_step
-    
-    for update in range(num_updates):
+
+    for update in range(initial_update, num_updates):
         key, rollout_key, train_key = jax.random.split(runner_state.key, 3)
         runner_state = runner_state._replace(key=key, update_step=jnp.array(update))
         
@@ -501,29 +603,31 @@ def train_phase2(
         training_progress = update / num_updates
         
         # Calculate curriculum parameters based on progress
+        # HOLD TRAP FIX (2025-12-07): Increased forced ratios and PM bonus retention
         if training_progress < 0.20:  # Phase 2A: Boot Camp
-            forced_position_ratio = 0.5  # 50% start with position
-            pm_bonus_mult = 1.0  # Full PM bonus ($400)
-            entry_bonus_mult = 1.0  # Full entry bonus ($300)
+            forced_position_ratio = 0.7  # 70% start with position (was 50%)
+            pm_bonus_mult = 1.0  # Full PM bonus
+            entry_bonus_mult = 1.0  # Full entry bonus
             commission_mult = 0.1  # Very low commission
             phase_name = "2A-Boot"
         elif training_progress < 0.80:  # Phase 2B: Integrated
             phase_progress = (training_progress - 0.20) / 0.60  # 0→1 within Phase 2B
-            forced_position_ratio = 0.5 - 0.4 * phase_progress  # 50%→10%
-            pm_bonus_mult = 1.0 - 0.75 * phase_progress  # 100%→25%
+            forced_position_ratio = 0.7 - 0.5 * phase_progress  # 70%→20% (was 50%→10%)
+            pm_bonus_mult = 1.0 - 0.5 * phase_progress  # 100%→50% (was 100%→25%)
             entry_bonus_mult = 1.0 - 0.5 * phase_progress  # 100%→50%
             commission_mult = 0.1 + 0.7 * phase_progress  # 10%→80%
             phase_name = "2B-Int"
         else:  # Phase 2C: Production Hardening
-            forced_position_ratio = 0.0  # No forced positions
+            forced_position_ratio = 0.1  # 10% forced (was 0%) - maintains PM practice
             pm_bonus_mult = 0.0  # No exploration bonus
             entry_bonus_mult = 0.0  # No exploration bonus
             commission_mult = 1.0  # Full commission
             phase_name = "2C-Prod"
         
-        # Calculate actual bonus values
-        pm_bonus = 400.0 * pm_bonus_mult
-        entry_bonus = 300.0 * entry_bonus_mult
+        # Calculate actual bonus values (use updated base values from env_params)
+        # CRITICAL FIX: Use $200 base (not $400) - updated in env_params default
+        pm_bonus = 200.0 * pm_bonus_mult
+        entry_bonus = 100.0 * entry_bonus_mult
         curriculum_commission = 2.5 * commission_mult
         
         # Update env_params with current progress (chex dataclass requires recreate)
@@ -554,18 +658,29 @@ def train_phase2(
             entry_action_exploration_bonus=entry_bonus
         )
         
+        # CRITICAL FIX: Calculate exploration floor for PM actions (same as Phase 1)
+        # Permanent 5% floor prevents HOLD trap convergence
+        exploration_floor_horizon = config.total_timesteps * 1.0
+        floor_progress = min(1.0, current_global_timestep / exploration_floor_horizon)
+        base_floor = 0.08    # Start at 8%
+        min_floor = 0.05     # Never go below 5%
+        current_floor = min_floor + (base_floor - min_floor) * max(0.0, 1.0 - floor_progress)
+        
         transitions, runner_state, episode_returns = collect_rollouts_phase2(
-            runner_state, env_params, data, config.num_steps, config.num_envs
+            runner_state, env_params, data, config.num_steps, config.num_envs,
+            exploration_floor=current_floor  # CRITICAL FIX: Pass floor to rollouts
         )
         
         advantages = transitions.value
         
+        # CRITICAL FIX: Pass exploration_floor to train_step for proper loss calculation
         new_train_state, train_metrics = train_step(
             runner_state.train_state,
             transitions,
             advantages,
             config,
-            train_key
+            train_key,
+            exploration_floor=current_floor  # CRITICAL FIX: Ensure floor used in training
         )
         
         runner_state = runner_state._replace(train_state=new_train_state)
@@ -615,9 +730,10 @@ def train_phase2(
             # Use curriculum values calculated above (phase_name, pm_bonus, entry_bonus, forced_position_ratio)
             bonus_str = f"Entry: ${entry_bonus:.0f}, PM: ${pm_bonus:.0f}" if pm_bonus > 0 or entry_bonus > 0 else "Disabled"
             forced_str = f"Forced: {forced_position_ratio*100:.0f}%" if forced_position_ratio > 0 else ""
+            floor_str = f"Floor: {current_floor*100:.1f}%"  # ADDED: Show action floor value
             
             # Enhanced logging with phase name and curriculum info
-            print(f"[{phase_name}] Update {update + 1}/{num_updates} | SPS: {sps:,.0f} | Return: {episode_returns.mean():.2f} | Loss: {train_metrics['policy_loss']:.4f} | {forced_str} 🎯 {bonus_str} | Comm: ${curriculum_commission:.2f}")
+            print(f"[{phase_name}] Update {update + 1}/{num_updates} | SPS: {sps:,.0f} | Return: {episode_returns.mean():.2f} | Loss: {train_metrics['policy_loss']:.4f} | {forced_str} 🎯 {bonus_str} | Comm: ${curriculum_commission:.2f} | {floor_str}")
         
         # ===== ACTION DISTRIBUTION MONITORING (Critical for detecting HOLD trap) =====
         # Track distribution for all 6 actions every 10 updates
@@ -668,6 +784,11 @@ def train_phase2(
             # Save normalizer
             with open(os.path.join(checkpoint_dir, f"normalizer_{update + 1}.pkl"), "wb") as f:
                 pickle.dump(runner_state.normalizer, f)
+        
+        # MEMORY SAFETY: Clear JAX caches every 500 updates as safety net
+        if (update + 1) % 500 == 0:
+            jax.clear_caches()
+            print(f"  [MEMORY] Cleared JAX caches at update {update + 1}")
             
     print("Training complete.")
     print("Training complete.")
@@ -698,36 +819,49 @@ if __name__ == "__main__":
     parser.add_argument("--data_path", type=str, default=None, help="Path to market data CSV (auto-detects if not provided)")
     parser.add_argument("--market", type=str, default="NQ", help="Market symbol (NQ, ES, etc.)")
     parser.add_argument("--hardware-profile", type=str, default=None, help="Path to hardware profile YAML")
-    
+    parser.add_argument("--resume", action="store_true", help="Resume from most recent checkpoint")
+    parser.add_argument("--resume-from", type=str, default=None, help="Resume from specific checkpoint (e.g., 'phase2_jax_2400')")
+
     args = parser.parse_args()
     
     # Auto-detect data path if not provided
     if args.data_path is None and not args.test:
         import glob
         
-        # Try market-specific file first
-        market_file = f"data/{args.market}_D1M.csv"
-        if os.path.exists(market_file):
-            args.data_path = market_file
-            print(f"[AUTO-DETECT] Using market data: {market_file}")
+        # TRAIN/TEST SPLIT: Prefer train-specific file first
+        train_file = f"data/{args.market}_D1M_train.csv"
+        if os.path.exists(train_file):
+            args.data_path = train_file
+            print(f"[AUTO-DETECT] Using TRAIN data (80%): {train_file}")
         else:
-            # Try generic D1M.csv
-            generic_file = "data/D1M.csv"
-            if os.path.exists(generic_file):
-                args.data_path = generic_file
-                print(f"[AUTO-DETECT] Using generic data: {generic_file}")
+            # Fall back to full market-specific file
+            market_file = f"data/{args.market}_D1M.csv"
+            if os.path.exists(market_file):
+                args.data_path = market_file
+                print(f"[AUTO-DETECT] Using full market data: {market_file}")
+                print(f"  ⚠️  Note: Consider running Data Processing to create train/test split")
             else:
-                # Search for any *_D1M.csv file
-                pattern = "data/*_D1M.csv"
-                candidates = sorted(glob.glob(pattern))
-                if candidates:
-                    args.data_path = candidates[0]
-                    print(f"[AUTO-DETECT] Using found data: {args.data_path}")
+                # Try generic D1M.csv
+                generic_file = "data/D1M.csv"
+                if os.path.exists(generic_file):
+                    args.data_path = generic_file
+                    print(f"[AUTO-DETECT] Using generic data: {generic_file}")
                 else:
-                    raise FileNotFoundError(
-                        f"No market data found. Expected: {market_file}, {generic_file}, or any data/*_D1M.csv file. "
-                        f"Please specify --data_path explicitly or ensure data files are in the data/ directory."
-                    )
+                    # Search for any *_D1M_train.csv or *_D1M.csv file
+                    train_candidates = sorted(glob.glob("data/*_D1M_train.csv"))
+                    if train_candidates:
+                        args.data_path = train_candidates[0]
+                        print(f"[AUTO-DETECT] Using found train data: {args.data_path}")
+                    else:
+                        full_candidates = sorted(glob.glob("data/*_D1M.csv"))
+                        if full_candidates:
+                            args.data_path = full_candidates[0]
+                            print(f"[AUTO-DETECT] Using found data: {args.data_path}")
+                        else:
+                            raise FileNotFoundError(
+                                f"No market data found. Expected: {train_file}, {market_file}, or any data/*_D1M.csv file. "
+                                f"Please specify --data_path explicitly or ensure data files are in the data/ directory."
+                            )
 
     # Apply hardware profile if provided
     if args.hardware_profile:
@@ -750,7 +884,15 @@ if __name__ == "__main__":
                     pass
         except Exception as e:
             print(f"[WARN] Failed to load hardware profile: {e}")
-    
+
+    # FIX: Ensure checkpoint directory matches main.py expectation (models/phase2_jax_{market})
+    # If the user didn't specify a custom dir (it's the default), append the market
+    if args.checkpoint_dir == "models/phase2_jax":
+        args.checkpoint_dir = f"models/phase2_jax_{args.market.lower()}"
+        print(f"[CONFIG] Auto-updated checkpoint dir to: {args.checkpoint_dir}")
+    else:
+        print(f"[CONFIG] Using specified checkpoint dir: {args.checkpoint_dir}")
+        
     config = PPOConfig(
         num_envs=args.num_envs,
         num_steps=args.num_steps,
@@ -758,7 +900,25 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate
     )
     
-    env_params = EnvParamsPhase2()
+    # FIX (2025-12-10): Use market-specific contract values instead of ES defaults
+    # Previously used EnvParamsPhase2() which defaults to ES (contract_size=50.0)
+    # NQ should use $20/point, not $50/point - losses were calculated 2.5x too large!
+    market_spec = get_market_spec(args.market)
+    if market_spec:
+        print(f"{Colors.GREEN}Using {args.market} contract specs: ${market_spec.contract_multiplier}/point, max {market_spec.max_position_size} contracts{Colors.RESET}")
+        env_params = EnvParamsPhase2(
+            contract_size=market_spec.contract_multiplier,
+            contract_value=market_spec.contract_multiplier,
+            tick_size=market_spec.tick_size,
+            tick_value=market_spec.tick_value,
+            commission=market_spec.commission,
+            slippage_ticks=market_spec.slippage_ticks,
+            # NEW (2025-12-12): Market-specific position sizing
+            max_position_size=float(market_spec.max_position_size),
+        )
+    else:
+        print(f"{Colors.YELLOW}Warning: Unknown market {args.market}, using ES defaults{Colors.RESET}")
+        env_params = EnvParamsPhase2()
     
     if args.test:
         print("Running Phase 2 JAX Test Mode...")
@@ -814,5 +974,7 @@ if __name__ == "__main__":
         phase1_checkpoint=args.phase1_checkpoint,
         checkpoint_dir=args.checkpoint_dir,
         market=args.market,
-        seed=args.seed
+        seed=args.seed,
+        resume=args.resume,
+        resume_from=args.resume_from
     )

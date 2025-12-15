@@ -509,12 +509,12 @@ class TradingEnvironmentPhase1(gym.Env):
             self.violation_occurred = True
             self.done_reason = "apex_time_violation"  # DIAGNOSTIC
             reward = -0.05  # Reduced penalty for Phase 1
-            return self._get_observation(), reward, terminated, False, {
-                'portfolio_value': self.balance,
-                'position': self.position,
-                'apex_violation': True,
-                'done_reason': self.done_reason  # DIAGNOSTIC
-            }
+            # return self._get_observation(), reward, terminated, False, {
+            #     'portfolio_value': self.balance,
+            #     'position': self.position,
+            #     'apex_violation': True,
+            #     'done_reason': self.done_reason  # DIAGNOSTIC
+            # }
         
         # 3. EXECUTE NEW ACTION (if flat)
         # RTH gating: allow new entries only between 09:30 and 16:59 ET
@@ -661,6 +661,7 @@ class TradingEnvironmentPhase1(gym.Env):
             'episode_bars': self.current_step - self._episode_start_index,  # DIAGNOSTIC
             'trailing_dd_level': self.trailing_dd_level,  # DIAGNOSTIC
         }
+        self.current_step += 1
 
         return obs, reward, terminated, truncated, info
 

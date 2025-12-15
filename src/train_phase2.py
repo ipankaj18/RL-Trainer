@@ -1290,7 +1290,6 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
             initial_sl_multiplier=PHASE2_CONFIG['initial_sl_multiplier'],
             initial_tp_ratio=PHASE2_CONFIG['initial_tp_ratio'],
             position_size_contracts=PHASE2_CONFIG['position_size'],
-            position_size_contracts=PHASE2_CONFIG['position_size'],
             trailing_drawdown_limit=15000,  # EVAL: RELAXED to $15K (match training) to allow learning
             start_index=PHASE2_CONFIG['window_size'],
             randomize_start_offsets=PHASE2_CONFIG.get('eval_randomize_start_offsets', False),

@@ -502,7 +502,6 @@ market_name = "NQ"  # Example market name; replace as needed
 wandb_run = wandb.init(
     project="rl-trading-phase1",
     group=f"phase1-{market_name}",
-    name=f"{market_name}-seed42",
     config={
         **PHASE1_CONFIG,
         "phase": 1,

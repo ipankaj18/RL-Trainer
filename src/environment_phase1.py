@@ -661,7 +661,6 @@ class TradingEnvironmentPhase1(gym.Env):
             'episode_bars': self.current_step - self._episode_start_index,  # DIAGNOSTIC
             'trailing_dd_level': self.trailing_dd_level,  # DIAGNOSTIC
         }
-        self.current_step += 1
 
         return obs, reward, terminated, truncated, info
 

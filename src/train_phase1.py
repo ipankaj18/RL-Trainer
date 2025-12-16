@@ -197,7 +197,7 @@ PHASE1_CONFIG = {
     # Training - UPGRADED to 10M timesteps for better baseline
     # IMPROVEMENT: Increased from 5M to 10M for stronger Phase 1 foundation
     'total_timesteps': 10_000_000,  # 10M for production (PhaseGuard requirement)
-    'num_envs': 64,  # OPTIMIZED: Sweet spot for CPU/GPU balance with SubprocVecEnv
+    'num_envs': 16,  # OPTIMIZED: Sweet spot for CPU/GPU balance with SubprocVecEnv
 
     # Network architecture - MAINTAINED for capacity
     'policy_layers': [512, 256, 128],

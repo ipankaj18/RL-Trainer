@@ -450,6 +450,8 @@ class TradingEnvironmentPhase1(gym.Env):
         """Execute action and return (obs, reward, terminated, truncated, info)."""
         if self.current_step >= len(self.data) - 1:
             return self._get_observation(), 0.0, False, True, {}
+        
+        MAX_EPISODE_BARS = 390  # or 1000 for Phase 1
 
         # Current market state
         current_price = self.data['close'].iloc[self.current_step]
@@ -644,6 +646,10 @@ class TradingEnvironmentPhase1(gym.Env):
             if self.done_reason is None:  # DIAGNOSTIC
                 self.done_reason = "end_of_data"
 
+        
+        if self.current_step - self._episode_start_index >= MAX_EPISODE_BARS:
+            truncated = True
+            self.done_reason = "episode_length_cap"
         obs = self._get_observation()
 
         # DIAGNOSTIC: Enhanced info dict with compliance details

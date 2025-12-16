@@ -197,7 +197,7 @@ PHASE1_CONFIG = {
     # Training - UPGRADED to 10M timesteps for better baseline
     # IMPROVEMENT: Increased from 5M to 10M for stronger Phase 1 foundation
     'total_timesteps': 10_000_000,  # 10M for production (PhaseGuard requirement)
-    'num_envs': 16,  # OPTIMIZED: Sweet spot for CPU/GPU balance with SubprocVecEnv
+    'num_envs': 64,  # OPTIMIZED: Sweet spot for CPU/GPU balance with SubprocVecEnv
 
     # Network architecture - MAINTAINED for capacity
     'policy_layers': [512, 256, 128],
@@ -495,25 +495,6 @@ def make_env(data, second_data, env_id, config, market_spec):
 
     return _init
 
-market_name = "NQ"  # Example market name; replace as needed
-# =========================
-# Weights & Biases Init
-# =========================
-wandb_run = wandb.init(
-    project="rl-trading-phase1",
-    group=f"phase1-{market_name}",
-    config={
-        **PHASE1_CONFIG,
-        "phase": 1,
-        "market": market_name,
-        "algo": "MaskablePPO",
-        "action_masking": True,
-        "num_envs": 64,
-    },
-    sync_tensorboard=True,   # IMPORTANT
-    monitor_gym=True,        # Captures episode rewards
-    save_code=True,
-)
 
 wandb_callback = WandbCallback(
     gradient_save_freq=0,   # Avoid heavy overhead
@@ -560,6 +541,26 @@ def train_phase1(
         eval_updates=PHASE1_CONFIG.get('eval_interval_updates', 6),
         min_eval_episodes=PHASE1_CONFIG.get('min_eval_episodes', 8),
         printer=safe_print,
+    )
+
+    market_name = "NQ"  # Example market name; replace as needed
+    # =========================
+    # Weights & Biases Init
+    # =========================
+    wandb_run = wandb.init(
+        project="rl-trading-phase1",
+        group=f"phase1-{market_name}",
+        config={
+            **PHASE1_CONFIG,
+            "phase": 1,
+            "market": market_name,
+            "algo": "MaskablePPO",
+            "action_masking": True,
+            "num_envs": 64,
+        },
+        sync_tensorboard=True,   # IMPORTANT
+        monitor_gym=True,        # Captures episode rewards
+        save_code=True,
     )
 
     # Detect and select market

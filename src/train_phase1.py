@@ -496,12 +496,6 @@ def make_env(data, second_data, env_id, config, market_spec):
     return _init
 
 
-wandb_callback = WandbCallback(
-    gradient_save_freq=0,   # Avoid heavy overhead
-    model_save_path=None,   # You already handle checkpoints
-    verbose=0,
-)
-
 def train_phase1(
     continue_training=False,
     model_path=None,
@@ -561,6 +555,12 @@ def train_phase1(
         sync_tensorboard=True,   # IMPORTANT
         monitor_gym=True,        # Captures episode rewards
         save_code=True,
+    )
+
+    wandb_callback = WandbCallback(
+        gradient_save_freq=0,   # Avoid heavy overhead
+        model_save_path=None,   # You already handle checkpoints
+        verbose=0,
     )
 
     # Detect and select market

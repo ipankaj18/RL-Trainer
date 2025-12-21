@@ -205,8 +205,8 @@ PHASE1_CONFIG = {
     # MaskablePPO parameters - ENHANCED for exploration
     'learning_rate': 1e-4,
     'n_steps': 4096,  # Rollout length
-    'batch_size': 512,
-    'n_epochs': 10,  # Optimization epochs per update
+    'batch_size': 1024,
+    'n_epochs': 8,  # Optimization epochs per update
     'gamma': 0.99,  # Discount factor
     'gae_lambda': 0.95,  # GAE parameter
     'clip_range': 0.2,  # Clip range

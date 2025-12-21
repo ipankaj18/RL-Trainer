@@ -259,8 +259,8 @@ class PolicyController(BaseCallback):
         current_lr = resolve_learning_rate(getattr(self.model, 'learning_rate', None))
         if current_lr is None:
             return False
-        reduction_factor = self.lr_config.get('reduction_factor', 0.5)
-        min_lr = self.lr_config.get('min_lr', 1e-5)
+        reduction_factor = float(self.lr_config.get('reduction_factor', 0.5))
+        min_lr = float(self.lr_config.get('min_lr', 1e-5))
 
         new_lr = max(current_lr * reduction_factor, min_lr)
 

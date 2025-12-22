@@ -220,7 +220,7 @@ PHASE1_CONFIG = {
 
     # Early stopping with KL monitoring
     'target_kl': 0.01,
-    'use_kl_callback': True,
+    'use_kl_callback': False,
 
     # Environment parameters - IMPROVED for longer episodes
     'window_size': 20,

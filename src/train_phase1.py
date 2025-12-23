@@ -480,6 +480,7 @@ def make_env(data, second_data, env_id, config, market_spec):
             enable_daily_loss_limit=False,
             enable_profit_target=False,
             enable_4pm_rule=True,  # Keep this for safety
+            max_episode_bars=config.get('episode_length', 390),
         )
 
         # Validation: Ensure environment has randomization support

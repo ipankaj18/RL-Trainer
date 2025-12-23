@@ -103,6 +103,7 @@ class TradingEnvironmentPhase1(gym.Env):
         start_index: Optional[int] = None,
         randomize_start_offsets: bool = True,
         min_episode_bars: int = 1500,
+        **kwargs
     ):
         """
         Initialize Phase 1 trading environment - FIXED.
@@ -142,6 +143,8 @@ class TradingEnvironmentPhase1(gym.Env):
         self.enable_daily_loss_limit = enable_daily_loss_limit
         self.enable_profit_target = enable_profit_target
         self.enable_4pm_rule = enable_4pm_rule
+
+        self.MAX_EPISODE_BARS = kwargs.get('max_episode_bars', 390)
 
         # APEX PROFIT TARGET (RITHMIC rule) - DISABLED for Phase 1
         if self.enable_profit_target:
@@ -451,7 +454,7 @@ class TradingEnvironmentPhase1(gym.Env):
         if self.current_step >= len(self.data) - 1:
             return self._get_observation(), 0.0, False, True, {}
         
-        MAX_EPISODE_BARS = 390  # or 1000 for Phase 1
+        MAX_EPISODE_BARS = self.MAX_EPISODE_BARS  # or 1000 for Phase 1
 
         # Current market state
         current_price = self.data['close'].iloc[self.current_step]

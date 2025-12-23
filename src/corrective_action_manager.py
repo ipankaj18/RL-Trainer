@@ -274,7 +274,7 @@ class CorrectiveActionManager(BaseCallback):
             return False
 
         # Get Sharpe drop threshold
-        sharpe_threshold = self.rollback_triggers.get('sharpe_drop_threshold', 0.20)
+        sharpe_threshold = self.rollback_triggers.get('sharpe_drop_threshold', 0.50)
 
         # Calculate recent best Sharpe (last 10 evaluations)
         recent_history = list(self.sharpe_history)[-10:]

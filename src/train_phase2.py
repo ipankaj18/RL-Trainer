@@ -12,7 +12,15 @@ Optimized for: RunPod RTX 4000 Ada deployment
 """
 
 import os
+import wandb
+from wandb.integration.sb3 import WandbCallback
 
+from kaggle_secrets import UserSecretsClient
+import wandb
+
+secrets = UserSecretsClient()
+wandb_api_key = secrets.get_secret("WANDB_API_KEY")
+wandb.login(key=wandb_api_key)
 # Limit math/BLAS thread pools before heavy numerical imports to avoid exhausting
 # pthread limits on constrained systems.
 try:
@@ -1170,6 +1178,32 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         eval_updates=PHASE2_CONFIG.get('eval_interval_updates', 4),
         min_eval_episodes=PHASE2_CONFIG.get('min_eval_episodes', 8),
         printer=safe_print,
+    )
+
+    market_name = "NQ"  # Example market name; replace as needed
+    # =========================
+    # Weights & Biases Init
+    # =========================
+    wandb_run = wandb.init(
+        project="rl-trading-phase2",
+        group=f"phase2-{market_name}",
+        config={
+            **PHASE2_CONFIG,
+            "phase": 2,
+            "market": market_name,
+            "algo": "MaskablePPO",
+            "action_masking": True,
+            "num_envs": 64,
+        },
+        sync_tensorboard=True,   # IMPORTANT
+        monitor_gym=True,        # Captures episode rewards
+        save_code=True,
+    )
+
+    wandb_callback = WandbCallback(
+        gradient_save_freq=0,   # Avoid heavy overhead
+        model_save_path=None,   # You already handle checkpoints
+        verbose=0,
     )
 
     # Detect and select market

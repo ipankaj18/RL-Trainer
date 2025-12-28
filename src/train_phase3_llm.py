@@ -1284,11 +1284,11 @@ def train_phase3(
     # Weights & Biases Init
     # =========================
     wandb_run = wandb.init(
-        project="rl-trading-phase2",
-        group=f"phase2-{market_name}",
+        project="rl-trading-phase3",
+        group=f"phase3-{market_name}",
         config={
             **PHASE3_CONFIG,
-            "phase": 2,
+            "phase": 3,
             "market": market_name,
             "algo": "MaskablePPO",
             "action_masking": True,

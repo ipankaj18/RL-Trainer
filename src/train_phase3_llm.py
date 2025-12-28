@@ -18,6 +18,16 @@ Based on: train_phase2.py with LLM integration
 """
 
 import os
+import wandb
+from wandb.integration.sb3 import WandbCallback
+
+from kaggle_secrets import UserSecretsClient
+import wandb
+
+secrets = UserSecretsClient()
+wandb_api_key = secrets.get_secret("WANDB_API_KEY")
+wandb.login(key=wandb_api_key)
+
 import platform
 import shutil
 from copy import deepcopy
@@ -1267,6 +1277,32 @@ def train_phase3(
         eval_updates=config.get('eval_interval_updates', 5),
         min_eval_episodes=config.get('min_eval_episodes', 6),
         printer=safe_print,
+    )
+
+    market_name = "NQ"  # Example market name; replace as needed
+    # =========================
+    # Weights & Biases Init
+    # =========================
+    wandb_run = wandb.init(
+        project="rl-trading-phase2",
+        group=f"phase2-{market_name}",
+        config={
+            **PHASE3_CONFIG,
+            "phase": 2,
+            "market": market_name,
+            "algo": "MaskablePPO",
+            "action_masking": True,
+            "num_envs": 64,
+        },
+        sync_tensorboard=True,   # IMPORTANT
+        monitor_gym=True,        # Captures episode rewards
+        save_code=True,
+    )
+
+    wandb_callback = WandbCallback(
+        gradient_save_freq=0,   # Avoid heavy overhead
+        model_save_path=None,   # You already handle checkpoints
+        verbose=0,
     )
 
     # Load fusion/LLM toggles (critical for PURE RL mode)

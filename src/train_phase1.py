@@ -229,8 +229,8 @@ PHASE1_CONFIG = {
     'initial_tp_ratio': 3.0,
     'position_size': 1.0,  # Futures exchanges require whole contracts
     'trailing_dd_limit': 15000,  # RELAXED from 5000 (was too restrictive)
-    'episode_length': 10000,  # 1 trading day
-    'min_episode_bars': 5000,  # IMPROVED: Increased from 1500 for longer episodes
+    'episode_length': 6000,  # 1 trading day
+    'min_episode_bars': 1200,  # IMPROVED: Increased from 1500 for longer episodes
     'randomize_start_offsets': True,
     'deterministic_env_offsets': False,
     'start_offset_seed': 11,
@@ -479,7 +479,7 @@ def make_env(data, second_data, env_id, config, market_spec):
             min_episode_bars=config.get('min_episode_bars', 1500),
             enable_daily_loss_limit=False,
             enable_profit_target=False,
-            enable_4pm_rule=True,  # Keep this for safety
+            enable_4pm_rule=False,  # Keep this for safety
             max_episode_bars=config.get('episode_length', 390),
         )
 
@@ -672,7 +672,8 @@ def train_phase1(
             min_episode_bars=PHASE1_CONFIG.get('min_episode_bars', 1500),
             enable_daily_loss_limit=False,
             enable_profit_target=False,
-            enable_4pm_rule=True,
+            enable_4pm_rule=False,
+            max_episode_bars=PHASE1_CONFIG.get('episode_length', 390),
         )))
     ])
     eval_env = ActionMaskVecEnvWrapper(eval_env)

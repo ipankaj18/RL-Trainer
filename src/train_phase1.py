@@ -229,7 +229,7 @@ PHASE1_CONFIG = {
     'initial_tp_ratio': 3.0,
     'position_size': 1.0,  # Futures exchanges require whole contracts
     'trailing_dd_limit': 15000,  # RELAXED from 5000 (was too restrictive)
-    'episode_length': 6000,  # 1 trading day
+    'episode_length': 5000,  # 1 trading day
     'min_episode_bars': 1200,  # IMPROVED: Increased from 1500 for longer episodes
     'randomize_start_offsets': True,
     'deterministic_env_offsets': False,

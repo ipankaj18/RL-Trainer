@@ -214,7 +214,7 @@ class PhaseGuard:
         try:
             data = np.load(eval_path)
             last_results = data['results'][-1]  # Most recent checkpoint
-            last_lengths = data['ep_lengths'][-1]
+            last_lengths = data['ep_lengths'][-2]
             timesteps = data['timesteps'][-1]
         except Exception as e:
             return False, f"❌ Failed to load evaluation data: {e}", {}

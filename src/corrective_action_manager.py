@@ -289,7 +289,7 @@ class CorrectiveActionManager(BaseCallback):
                     f"Sharpe drop detected: {recent_best:.2f} â†’ {current_sharpe:.2f} "
                     f"({drop_pct*100:.1f}% drop)"
                 )
-                return True
+                # return True
 
         return False
 

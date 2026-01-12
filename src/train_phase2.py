@@ -694,6 +694,21 @@ class ActionDistributionCallback(CheckpointCallback):
                 self.action_counts.fill(0)
                 self.invalid_action_count = 0
 
+def find_latest_checkpoint(checkpoint_dir: str):
+    if not os.path.exists(checkpoint_dir):
+        return None
+
+    ckpts = [
+        os.path.join(checkpoint_dir, f)
+        for f in os.listdir(checkpoint_dir)
+        if f.endswith(".zip")
+    ]
+    if not ckpts:
+        return None
+
+    return max(ckpts, key=os.path.getmtime)
+
+
 
 def make_env(data, second_data, env_id, config, market_spec):
     """
@@ -1109,7 +1124,7 @@ def load_phase1_and_transfer(config, env):
         return None
 
 
-def train_phase2(market_override=None, non_interactive=False, test_mode=False, hardware_profile=None):
+def train_phase2(market_override=None, non_interactive=False, test_mode=False, hardware_profile=None, resume=False):
     """Execute Phase 2 training with transfer learning.
 
     Args:
@@ -1302,6 +1317,13 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
     )
     safe_print("[ENV] Training environments created with VecNormalize")
 
+    vecnorm_path = f"models/phase2_{market_name.lower()}/vecnormalize.pkl"
+
+    if resume and os.path.exists(vecnorm_path):
+        safe_print(f"[RESUME] Loading VecNormalize stats from {vecnorm_path}")
+        env = VecNormalize.load(vecnorm_path, env)
+
+
     safe_print("[VALIDATION] Verifying training environment action space and mask shapes...")
     ensure_action_space(env, PHASE2_CONFIG['action_space'], label="TRAIN")
     log_action_mask_shape(env, PHASE2_CONFIG['action_space'], label="TRAIN")
@@ -1348,8 +1370,31 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         safe_print(f"[EVAL] SB3 mask tensor shape: {eval_sb3_masks.shape}")
     except Exception as mask_err:
         safe_print(f"[EVAL][ERROR] Unable to fetch SB3 masks: {mask_err}")
-    # Transfer learning from Phase 1
-    model = load_phase1_and_transfer(PHASE2_CONFIG, env)
+
+    model = None
+    checkpoint_dir = f"models/phase2_{market_name.lower()}/checkpoints"
+
+    if resume:
+        ckpt_path = find_latest_checkpoint(checkpoint_dir)
+        if ckpt_path:
+            safe_print(f"[RESUME] Loading model from {ckpt_path}")
+            model = MaskablePPO.load(
+                ckpt_path,
+                env=env,
+                device=PHASE2_CONFIG["device"],
+                custom_objects={
+                    "use_sde": False,
+                    "clip_range_vf": None,
+                    "target_kl": None,
+                },
+            )
+            safe_print(f"[RESUME] Model restored at {model.num_timesteps:,} timesteps")
+        else:
+            safe_print("[RESUME] No checkpoint found — falling back to Phase 1 transfer")
+
+    if model is None:
+        # Transfer learning from Phase 1
+        model = load_phase1_and_transfer(PHASE2_CONFIG, env)
 
     if model is None:
         learning_rate = get_learning_rate(PHASE2_CONFIG)
@@ -1598,6 +1643,7 @@ if __name__ == '__main__':
     parser.add_argument('--non-interactive', action='store_true',
                        help='Run in non-interactive mode (no prompts, use defaults)')
     parser.add_argument('--hardware-profile', type=str, help='Path to hardware profile yaml to apply')
+    parser.add_argument('--resume',  action='store_true',  help='Resume Phase 2 training from the latest checkpoint')
     args = parser.parse_args()
 
     # Override config for test mode (quick local testing)
@@ -1632,5 +1678,6 @@ if __name__ == '__main__':
         market_override=args.market,
         non_interactive=args.non_interactive,
         test_mode=args.test,
-        hardware_profile=args.hardware_profile
+        hardware_profile=args.hardware_profile,
+        resume=args.resume
     )

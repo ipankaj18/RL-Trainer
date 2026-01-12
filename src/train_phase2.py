@@ -1141,7 +1141,7 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         apply_hardware_profile(PHASE2_CONFIG, profile_data, test_mode)
 
     # PHASE GUARD: Validate Phase 1 completion before proceeding
-    if not test_mode:  # Skip gate in test mode for quick iteration
+    if not test_mode and not resume:  # Skip gate in test mode for quick iteration
 
         safe_print("\n" + "=" * 80)
         safe_print("PHASE GUARD: Validating Phase 1 Completion")

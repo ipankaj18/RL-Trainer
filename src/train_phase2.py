@@ -694,19 +694,27 @@ class ActionDistributionCallback(CheckpointCallback):
                 self.action_counts.fill(0)
                 self.invalid_action_count = 0
 
-def find_latest_checkpoint(checkpoint_dir: str):
+def find_latest_checkpoint_with_vecnorm(checkpoint_dir: str):
     if not os.path.exists(checkpoint_dir):
-        return None
+        return None, None
 
-    ckpts = [
-        os.path.join(checkpoint_dir, f)
-        for f in os.listdir(checkpoint_dir)
-        if f.endswith(".zip")
-    ]
-    if not ckpts:
-        return None
+    models = [f for f in os.listdir(checkpoint_dir) if f.endswith(".zip")]
+    if not models:
+        return None, None
 
-    return max(ckpts, key=os.path.getmtime)
+    latest = max(models, key=lambda f: os.path.getmtime(os.path.join(checkpoint_dir, f)))
+    base = latest.replace(".zip", "")
+    vecnorm = f"{base}_vecnormalize.pkl"
+
+    model_path = os.path.join(checkpoint_dir, latest)
+    vecnorm_path = os.path.join(checkpoint_dir, vecnorm)
+
+    if not os.path.exists(vecnorm_path):
+        safe_print(f"[RESUME][WARN] VecNormalize not found for {latest}")
+        vecnorm_path = None
+
+    return model_path, vecnorm_path
+
 
 
 
@@ -1316,12 +1324,13 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         clip_reward=10.0
     )
     safe_print("[ENV] Training environments created with VecNormalize")
-
-    vecnorm_path = f"models/phase2_{market_name.lower()}/vecnormalize.pkl"
-
-    if resume and os.path.exists(vecnorm_path):
-        safe_print(f"[RESUME] Loading VecNormalize stats from {vecnorm_path}")
-        env = VecNormalize.load(vecnorm_path, env)
+    checkpoint_dir = f"models/phase2/{market_name}/checkpoints"
+    model_ckpt = None
+    if resume:
+        model_ckpt, vecnorm_ckpt = find_latest_checkpoint_with_vecnorm(checkpoint_dir)
+        if vecnorm_ckpt and os.path.exists(vecnorm_ckpt):
+            safe_print(f"[RESUME] Restoring VecNormalize from {vecnorm_ckpt}")
+            env = VecNormalize.load(vecnorm_ckpt, env)
 
 
     safe_print("[VALIDATION] Verifying training environment action space and mask shapes...")
@@ -1375,11 +1384,10 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
     checkpoint_dir = f"models/phase2_{market_name.lower()}/checkpoints"
 
     if resume:
-        ckpt_path = find_latest_checkpoint(checkpoint_dir)
-        if ckpt_path:
-            safe_print(f"[RESUME] Loading model from {ckpt_path}")
+        if model_ckpt:
+            safe_print(f"[RESUME] Loading model from {model_ckpt}")
             model = MaskablePPO.load(
-                ckpt_path,
+                model_ckpt,
                 env=env,
                 device=PHASE2_CONFIG["device"],
                 custom_objects={

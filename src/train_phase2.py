@@ -1169,7 +1169,7 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
                 safe_print("[GUARD] WARNING: No Phase 1 model found for metadata check")
 
         # Pass model_path so metadata-based test detection runs
-        passed, message, metrics = PhaseGuard.validate_phase1(model_path=phase1_model_path)
+        passed, message, metrics = PhaseGuard.validate_phase1(model_path=phase1_model_path, override=False)
         safe_print(message)
 
         if not passed:

@@ -1391,6 +1391,7 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
                 env=env,
                 device=PHASE2_CONFIG["device"],
                 custom_objects={
+                    "clip_range": PHASE2_CONFIG["clip_range"],  # 👈 IMPORTANT
                     "use_sde": False,
                     "clip_range_vf": None,
                     "target_kl": None,

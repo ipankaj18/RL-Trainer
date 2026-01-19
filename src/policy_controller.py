@@ -142,13 +142,24 @@ class PolicyController(BaseCallback):
             self.original_ent = float(self.model.ent_coef)
             self.app_logger.info(f"PolicyController initialized - Original Entropy: {self.original_ent:.3f}")
 
-        if hasattr(self.model, 'clip_range'):
-            # Handle both float and callable clip_range
-            if callable(self.model.clip_range):
-                self.original_clip = self.model.clip_range(1.0)
-            else:
-                self.original_clip = float(self.model.clip_range)
-            self.app_logger.info(f"PolicyController initialized - Original Clip Range: {self.original_clip:.3f}")
+        if hasattr(self.model, "clip_range"):
+            try:
+                progress = getattr(self.model, "_current_progress_remaining", 1.0)
+                self.original_clip = float(self.model.clip_range(progress))
+                self.app_logger.info(
+                    f"PolicyController initialized - Original Clip Range: {self.original_clip:.3f}"
+                )
+            except Exception as e:
+                self.app_logger.warning(
+                    f"Failed to read clip_range safely: {e}"
+                )
+        # if hasattr(self.model, 'clip_range'):
+        #     # Handle both float and callable clip_range
+        #     if callable(self.model.clip_range):
+        #         self.original_clip = self.model.clip_range(1.0)
+        #     else:
+        #         self.original_clip = float(self.model.clip_range)
+        #     self.app_logger.info(f"PolicyController initialized - Original Clip Range: {self.original_clip:.3f}")
 
     def _on_step(self) -> bool:
         """

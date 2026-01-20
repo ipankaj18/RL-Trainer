@@ -1563,7 +1563,8 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         model.learn(
             total_timesteps=PHASE2_CONFIG['total_timesteps'],
             callback=callbacks,
-            progress_bar=use_progress_bar
+            progress_bar=use_progress_bar,
+            reset_num_timesteps=False  # IMPORTANT for resuming training
         )
         # Save phase_end checkpoint after successful training
         checkpoint_manager.on_phase_end()

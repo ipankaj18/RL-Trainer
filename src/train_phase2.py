@@ -1315,15 +1315,6 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
     env = ActionMaskVecEnvWrapper(env)
     safe_print("[ENV] Action masking enabled for 6-action space")
 
-    # Wrap with VecNormalize
-    env = VecNormalize(
-        env,
-        norm_obs=True,
-        norm_reward=True,
-        clip_obs=10.0,
-        clip_reward=10.0
-    )
-    safe_print("[ENV] Training environments created with VecNormalize")
     checkpoint_dir = f"models/phase2/{market_name}/checkpoints"
     model_ckpt = None
     if resume:
@@ -1331,7 +1322,16 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         if vecnorm_ckpt and os.path.exists(vecnorm_ckpt):
             safe_print(f"[RESUME] Restoring VecNormalize from {vecnorm_ckpt}")
             env = VecNormalize.load(vecnorm_ckpt, env)
-
+    else:
+         # Wrap with VecNormalize
+        env = VecNormalize(
+            env,
+            norm_obs=True,
+            norm_reward=True,
+            clip_obs=10.0,
+            clip_reward=10.0
+        )
+    safe_print("[ENV] Training environments created with VecNormalize")
 
     safe_print("[VALIDATION] Verifying training environment action space and mask shapes...")
     ensure_action_space(env, PHASE2_CONFIG['action_space'], label="TRAIN")
@@ -1371,7 +1371,14 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
     # Order matters: apply action-mask wrapper before VecNormalize so the top-level
     # env remains VecNormalize for normalization syncing with the training env.
     eval_env = ActionMaskVecEnvWrapper(eval_env)
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    if resume and vecnorm_ckpt and os.path.exists(vecnorm_ckpt):
+        safe_print("[RESUME] Loading VecNormalize for eval env from checkpoint")
+        eval_env = VecNormalize.load(vecnorm_ckpt, eval_env)
+        eval_env.training = False
+        eval_env.norm_reward = False
+    else:
+        eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+
     ensure_action_space(eval_env, PHASE2_CONFIG['action_space'], label="EVAL")
     log_action_mask_shape(eval_env, PHASE2_CONFIG['action_space'], label="EVAL")
     try:
@@ -1379,6 +1386,9 @@ def train_phase2(market_override=None, non_interactive=False, test_mode=False, h
         safe_print(f"[EVAL] SB3 mask tensor shape: {eval_sb3_masks.shape}")
     except Exception as mask_err:
         safe_print(f"[EVAL][ERROR] Unable to fetch SB3 masks: {mask_err}")
+
+    assert isinstance(env, VecNormalize)
+    assert isinstance(eval_env, VecNormalize)
 
     model = None
     checkpoint_dir = f"models/phase2_{market_name.lower()}/checkpoints"
